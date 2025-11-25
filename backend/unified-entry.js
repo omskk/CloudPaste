@@ -72,7 +72,7 @@ if (!isCloudflareWorkers) {
       import("path"),
       import("fs"),
       import("url"),
-      // import("./src/adapters/SQLiteAdapter.js"),
+      import("./src/adapters/SQLiteAdapter.js"),
     ]);
 
     const __filename = fileURLToPath(import.meta.url);
