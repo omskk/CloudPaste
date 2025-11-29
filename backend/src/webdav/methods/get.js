@@ -9,6 +9,11 @@ import { createWebDAVErrorResponse, withWebDAVErrorHandling } from "../utils/err
 import { addWebDAVHeaders, getStandardWebDAVHeaders } from "../utils/headerUtils.js";
 import { getEffectiveMimeType } from "../../utils/fileUtils.js";
 
+// Windows MiniRedir 302自动降级：
+// - 对同一路径，第一次请求按挂载策略走 302
+// - 如果客户端再次通过 WebDAV GET 同一路径，则视为 302 可能不可靠，后续该路径强制走本地代理
+const miniRedirTried302 = new Set();
+
 /**
  * 从驱动返回结果中提取 URL
  * 当前 WebDAV 场景下，generateDownloadUrl / generateWebDavProxyUrl 约定返回 string 或 { url, presignedUrl? }
@@ -39,7 +44,7 @@ function extractUrlFromResult(result) {
  */
 async function downloadViaProxy(fileSystem, path, fileName, c, userId, userType, contentType, lastModifiedStr, etag) {
   console.log(`WebDAV GET - 使用本地代理模式: ${path}`);
-  const fileResponse = await fileSystem.downloadFile(path, fileName, c.req, userId, userType);
+  const fileResponse = await fileSystem.downloadFile(path, fileName, c.req.raw, userId, userType);
 
   const updatedHeaders = new Headers(fileResponse.headers);
   updatedHeaders.set("Content-Type", contentType);
@@ -67,8 +72,12 @@ async function downloadViaProxy(fileSystem, path, fileName, c, userId, userType,
  * @param {D1Database} db - D1数据库实例
  */
 export async function handleGet(c, path, userId, userType, db) {
-  const isHead = c.req.method === "HEAD";
-  return withWebDAVErrorHandling("GET", async () => {
+    const isHead = c.req.method === "HEAD";
+    return withWebDAVErrorHandling("GET", async () => {
+    const userAgent = c.req.header("User-Agent") || "";
+    const isWindowsMiniRedirector =
+      userAgent.includes("Microsoft-WebDAV") || userAgent.includes("WebDAV-MiniRedir");
+
     // 创建FileSystem实例
     const repositoryFactory = c.get("repos");
     const mountManager = new MountManager(db, getEncryptionSecret(c), repositoryFactory);
@@ -177,24 +186,15 @@ export async function handleGet(c, path, userId, userType, db) {
       }
     }
 
-    // 如果是HEAD请求，返回头信息
-    if (isHead) {
-      return new Response(null, {
-        status: 200,
-        headers: {
-          "Content-Length": String(contentLength),
-          "Content-Type": contentType,
-          "Last-Modified": lastModifiedStr,
-          ETag: etag,
-          "Accept-Ranges": "bytes",
-          "Cache-Control": "max-age=3600",
-        },
-      });
-    }
-
     // 根据挂载点的 webdav_policy 配置决定处理方式
     const { driver, mount, subPath } = await mountManager.getDriverByPath(path, userId, userType);
-    const policy = mount.webdav_policy || "native_proxy";
+
+    // Windows MiniRedir：同一路径第一次走 302，之后强制走本地代理
+    const miniKey = path;
+    let policy = mount.webdav_policy || "native_proxy";
+    if (isWindowsMiniRedirector && miniRedirTried302.has(miniKey)) {
+      policy = "native_proxy";
+    }
 
     switch (policy) {
       case "302_redirect": {
@@ -209,11 +209,18 @@ export async function handleGet(c, path, userId, userType, db) {
               userId,
               userType,
               forceDownload: false,
+              channel: "webdav",
             });
 
             const url = extractUrlFromResult(result);
             if (url) {
               console.log(`WebDAV GET - 302 重定向到存储直链: ${url}`);
+
+              // 对 MiniRedir，记录该路径已尝试过 302，下次访问走本地代理
+              if (isWindowsMiniRedirector) {
+                miniRedirTried302.add(miniKey);
+              }
+
               return new Response(null, {
                 status: 302,
                 headers: getStandardWebDAVHeaders({
@@ -242,6 +249,7 @@ export async function handleGet(c, path, userId, userType, db) {
               subPath,
               db,
               request: c.req.raw,
+              channel: "webdav",
             });
             const url = extractUrlFromResult(result);
             if (url) {
@@ -268,7 +276,34 @@ export async function handleGet(c, path, userId, userType, db) {
       case "native_proxy":
       default: {
         // 策略 3：本地服务器代理（默认兜底）
-        return downloadViaProxy(fileSystem, path, fileName, c, userId, userType, contentType, lastModifiedStr, etag);
+        if (isHead) {
+          // HEAD 请求下只返回头信息，不传输主体内容
+          const headHeaders = {
+            "Content-Length": String(contentLength),
+            "Content-Type": contentType,
+            "Last-Modified": lastModifiedStr,
+            ETag: etag,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "max-age=3600",
+          };
+          const response = new Response(null, {
+            status: 200,
+            headers: headHeaders,
+          });
+          return addWebDAVHeaders(response);
+        }
+
+        return downloadViaProxy(
+          fileSystem,
+          path,
+          fileName,
+          c,
+          userId,
+          userType,
+          contentType,
+          lastModifiedStr,
+          etag,
+        );
       }
     }
   });
