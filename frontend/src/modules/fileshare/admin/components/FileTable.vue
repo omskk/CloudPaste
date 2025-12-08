@@ -92,9 +92,11 @@
           <!-- 存储配置 -->
           <div>
             <div class="text-xs font-medium uppercase" :class="darkMode ? 'text-gray-500' : 'text-gray-500'">存储配置</div>
-            <div :class="darkMode ? 'text-gray-300' : 'text-gray-700'">{{ file.storage_config_name || "默认存储" }}</div>
+            <div :class="darkMode ? 'text-gray-300' : 'text-gray-700'">
+              {{ getStorageConfigDisplay(file).primary }}
+            </div>
             <div class="text-xs" :class="darkMode ? 'text-gray-400' : 'text-gray-500'">
-              {{ file.storage_provider_type || "未知" }}
+              {{ getStorageConfigDisplay(file).secondary }}
             </div>
           </div>
 
@@ -207,6 +209,7 @@ import { getRemainingViews as getRemainingViewsUtil, formatFileSize } from "@/ut
 import { getFileIcon } from "@/utils/fileTypeIcons.js";
 import { formatDateTime, formatRelativeTime, parseUTCDate } from "@/utils/timeUtils.js";
 import { useFileshareService } from "@/modules/fileshare/fileshareService.js";
+import { useStorageConfigsStore } from "@/stores/storageConfigsStore.js";
 
 const props = defineProps({
   files: {
@@ -242,6 +245,20 @@ const props = defineProps({
 
 const isAdmin = computed(() => props.userType === "admin");
 const emit = defineEmits(["toggle-select", "toggle-select-all", "preview", "edit", "delete", "generate-qr", "copy-link", "copy-permanent-link"]);
+
+const storageConfigsStore = useStorageConfigsStore();
+
+const getStorageConfigDisplay = (file) => {
+  const typeLabel =
+    storageConfigsStore.getStorageTypeLabel(file.storage_type) ||
+    file.storage_type ||
+    "未知";
+  const hasBoundConfig = !!file.storage_config_id;
+  const primary = file.storage_config_name || typeLabel;
+  const secondary =
+    file.storage_provider_type || (hasBoundConfig ? typeLabel : "未绑定配置");
+  return { primary, secondary };
+};
 
 // 定义表格列（简化配置）
 const fileColumns = computed(() => [
@@ -364,14 +381,15 @@ const fileColumns = computed(() => [
     header: "存储配置",
     sortable: false,
     render: (file) => {
+      const { primary, secondary } = getStorageConfigDisplay(file);
       return h("div", { class: "flex flex-col" }, [
-        h("span", {}, file.storage_config_name || "默认存储"),
+        h("span", {}, primary),
         h(
           "span",
           {
             class: `text-xs mt-1 ${props.darkMode ? "text-gray-400" : "text-gray-500"}`,
           },
-          file.storage_provider_type || "未知"
+          secondary
         ),
       ]);
     },

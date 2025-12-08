@@ -77,7 +77,8 @@ CREATE TABLE storage_configs (
   admin_id TEXT,                       -- 归属管理员（允许NULL以兼容/预留）
   is_public INTEGER NOT NULL DEFAULT 0,
   is_default INTEGER NOT NULL DEFAULT 0,
-  remark TEXT,
+  remark TEXT,                         -- 备注说明
+  url_proxy TEXT,                      -- 代理入口 URL（例如 Worker/CDN 反代入口）
   status TEXT NOT NULL DEFAULT 'ENABLED',
   config_json TEXT NOT NULL,           -- 驱动私有配置（JSON，敏感字段加密后存入）
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -223,6 +224,99 @@ CREATE INDEX idx_storage_mounts_created_by ON storage_mounts(created_by);
 CREATE INDEX idx_storage_mounts_is_active ON storage_mounts(is_active);
 CREATE INDEX idx_storage_mounts_sort_order ON storage_mounts(sort_order);
 
+
+-- 通用上传会话表：管理各存储驱动的前端分片/断点续传会话
+CREATE TABLE upload_sessions (
+  id TEXT PRIMARY KEY,                   -- 内部会话ID（例如 upl_xxx），供前后端统一引用
+
+  -- 主体与目标信息
+  user_id TEXT NOT NULL,                 -- 用户或 API Key 标识
+  user_type TEXT NOT NULL,               -- 'admin' | 'apikey' | 其他
+  storage_type TEXT NOT NULL,            -- 存储类型：S3 / ONEDRIVE / WEBDAV / LOCAL 等
+  storage_config_id TEXT NOT NULL,       -- 关联的存储配置 ID（storage_configs.id）
+  mount_id TEXT,                         -- 关联挂载 ID（storage_mounts.id，可为空）
+  fs_path TEXT NOT NULL,                 -- FS 视图路径，如 /onedrive/path/file.ext 或 /s3/bucket/key
+  source TEXT NOT NULL,                  -- 会话来源：FS / SHARE / OTHER
+
+  -- 文件级元数据
+  file_name TEXT NOT NULL,               -- 文件名
+  file_size INTEGER NOT NULL,            -- 总大小（字节）
+  mime_type TEXT,                        -- MIME 类型（可选）
+  checksum TEXT,                         -- 校验和（可选，例如 SHA-256）
+
+  -- 文件指纹（用于跨驱动/跨会话识别同一逻辑文件）
+  fingerprint_algo TEXT,                 -- 指纹算法标识，例如 meta-v1 / sha256 等
+  fingerprint_value TEXT,                -- 指纹值（算法自定义，可为元数据拼接或哈希）
+
+  -- 策略与进度
+  strategy TEXT NOT NULL,                -- 分片策略：per_part_url / single_session / ...
+  part_size INTEGER NOT NULL,            -- 分片大小（字节）
+  total_parts INTEGER NOT NULL,          -- 预估分片总数
+  bytes_uploaded INTEGER NOT NULL DEFAULT 0,  -- 已上传字节数（对于 single_session 可由 nextExpectedRanges 推导）
+  uploaded_parts INTEGER NOT NULL DEFAULT 0,  -- 已确认的分片数量（对于 per_part_url 有意义）
+  next_expected_range TEXT,              -- 对于 single_session：Graph nextExpectedRanges[0]，如 \"5242880-35799947\"
+
+  -- provider 会话信息（驱动私有）
+  provider_upload_id TEXT,               -- 例如 S3 UploadId / 其他云 provider upload id
+  provider_upload_url TEXT,              -- 例如 OneDrive uploadSession.uploadUrl
+  provider_meta TEXT,                    -- JSON 扩展字段（驱动私有）
+
+  -- 会话状态与错误
+  status TEXT NOT NULL,                  -- active / completed / aborted / expired / error
+  error_code TEXT,
+  error_message TEXT,
+
+  -- 生命周期
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME                    -- 会话过期时间（例如 Graph expirationDateTime）
+);
+
+CREATE INDEX idx_upload_sessions_user ON upload_sessions(user_id, user_type);
+CREATE INDEX idx_upload_sessions_storage ON upload_sessions(storage_type, storage_config_id);
+CREATE INDEX idx_upload_sessions_mount_path ON upload_sessions(mount_id, fs_path);
+CREATE INDEX idx_upload_sessions_status ON upload_sessions(status, updated_at DESC);
+CREATE INDEX idx_upload_sessions_source ON upload_sessions(source);
+CREATE INDEX idx_upload_sessions_fingerprint ON upload_sessions(fingerprint_value);
+
+
+CREATE TABLE tasks (
+  -- 核心标识
+  task_id TEXT PRIMARY KEY,
+  task_type TEXT NOT NULL,           -- 'copy' | 'upload' | 'download' | 'delete' | 'archive'
+
+  -- 通用状态
+  status TEXT NOT NULL,              -- 'pending' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled'
+
+  -- 任务负载（JSON格式）
+  payload TEXT NOT NULL,             -- JSON: { items: [...], options: {...} }
+
+  -- 统计信息（JSON格式）
+  stats TEXT NOT NULL DEFAULT '{}',  -- JSON: { totalItems, processedItems, successCount, failedCount, skippedCount }
+
+  -- 错误信息（可选）
+  error_message TEXT,
+
+  -- 用户信息
+  user_id TEXT NOT NULL,
+  user_type TEXT NOT NULL,           -- 'admin' | 'apikey'
+
+  -- Workflows 关联（仅 Workers 运行时使用，可选）
+  workflow_instance_id TEXT,
+
+  -- 时间戳（Unix timestamp in milliseconds）
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  finished_at INTEGER
+)
+
+CREATE INDEX IF NOT EXISTS idx_tasks_status_created ON ${DbTables.TASKS} (status, created_at DESC)
+CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON ${DbTables.TASKS} (task_type, status)
+CREATE INDEX IF NOT EXISTS idx_tasks_user ON ${DbTables.TASKS} (user_id, created_at DESC)
+CREATE INDEX IF NOT EXISTS idx_tasks_workflow ON ${DbTables.TASKS} (workflow_instance_id) WHERE workflow_instance_id IS NOT NULL
+
+
 -- 创建初始管理员账户
 -- 默认账户: admin/admin123
 -- 注意: 这是SHA-256哈希后的密码，实际部署时应更改
@@ -246,13 +340,13 @@ VALUES (
 
 -- 插入示例S3配置（加密密钥仅作示例，实际应用中应当由系统加密存储）
 INSERT INTO storage_configs (
-  id, name, storage_type, admin_id, is_public, is_default, remark, status, config_json, created_at, updated_at, last_used
+  id, name, storage_type, admin_id, is_public, is_default, remark, url_proxy, status, config_json, created_at, updated_at, last_used
 ) VALUES (
   '22222222-2222-2222-2222-222222222222',
   'Cloudflare R2存储',
   'S3',
   '00000000-0000-0000-0000-000000000000',
-  0, 0, NULL, 'ENABLED',
+  0, 0, NULL, NULL, 'ENABLED',
   '{"provider_type":"Cloudflare R2","endpoint_url":"https://account-id.r2.cloudflarestorage.com","bucket_name":"my-cloudpaste-bucket","region":"auto","path_style":0,"default_folder":"uploads/","custom_host":null,"signature_expires_in":3600,"total_storage_bytes":null,"access_key_id":"encrypted:access-key-id-placeholder","secret_access_key":"encrypted:secret-access-key-placeholder"}',
   CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
 );
