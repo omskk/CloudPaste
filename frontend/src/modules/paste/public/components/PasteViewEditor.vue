@@ -14,9 +14,7 @@
           :title="isPlainTextMode ? '切换到Markdown模式' : '切换到纯文本模式'"
         >
           <span class="inline-flex items-center">
-            <svg class="w-3 h-3 mr-0.5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15v-4H8l4-8v4h3l-4 8z" fill="currentColor" />
-            </svg>
+            <IconRefresh size="xs" class="w-3 h-3 mr-0.5" />
             {{ isPlainTextMode ? "切换MD" : "切换TXT" }}
           </span>
         </button>
@@ -216,11 +214,17 @@
 </template>
 
 <script setup>
-import { ref, watch, onBeforeUnmount, onMounted } from "vue";
+import { ref, watch } from "vue";
+import { useEventListener } from "@vueuse/core";
 import { useGlobalMessage } from "@/composables/core/useGlobalMessage.js";
+import { useI18n } from "vue-i18n";
 import { getInputClasses } from "./PasteViewUtils";
+import { IconRefresh } from "@/components/icons";
 import VditorUnified from "@/components/common/VditorUnified.vue";
 import PasteCopyFormatMenu from "./PasteCopyFormatMenu.vue";
+import { createLogger } from "@/utils/logger.js";
+
+const log = createLogger("PasteViewEditor");
 
 // Props 定义
 const props = defineProps({
@@ -236,6 +240,9 @@ const props = defineProps({
 
 // Emits 定义
 const emit = defineEmits(["save", "cancel", "update:error", "update:isPlainTextMode"]);
+
+// 国际化
+const { t } = useI18n();
 
 // 全局消息
 const { showSuccess, showError, showWarning, showInfo } = useGlobalMessage();
@@ -355,7 +362,6 @@ const handleSlugInput = () => {
 
 // 编辑器事件处理
 const handleEditorReady = () => {
-  console.log("编辑器已准备就绪");
 };
 
 const handleContentChange = (content) => {
@@ -399,6 +405,9 @@ const updateCopyFormatMenuPosition = () => {
     };
   }
 };
+
+// 窗口尺寸变化时，保持菜单跟随工具栏按钮（自动清理）
+useEventListener(window, "resize", updateCopyFormatMenuPosition);
 
 // 显示复制格式菜单
 const showCopyFormatsMenu = (position = null) => {
@@ -507,7 +516,7 @@ const saveEdit = async () => {
 
   // 检查文本内容是否为空
   if (!newContent || !newContent.trim()) {
-    emit("update:error", "内容不能为空");
+    emit("update:error", t("markdown.messages.contentEmpty"));
     return;
   }
 
@@ -607,7 +616,7 @@ const importMarkdownFile = (event) => {
         markdownImporter.value.value = "";
       }
     } catch (error) {
-      console.error("导入文件时出错:", error);
+      log.error("导入文件时出错:", error);
       emit("update:error", "导入文件失败");
     }
   };
@@ -627,15 +636,6 @@ watch(
   }
 );
 
-// 清理
-onBeforeUnmount(() => {
-  copyFormatMenuVisible.value = false;
-  window.removeEventListener("resize", updateCopyFormatMenuPosition);
-});
-
-onMounted(() => {
-  window.addEventListener("resize", updateCopyFormatMenuPosition);
-});
 </script>
 
 <style scoped>

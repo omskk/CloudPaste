@@ -1,14 +1,14 @@
-# CloudPaste - Online Clipboard 📋
+# CloudPaste 📋
 
 <div align="center">
     <p>
     <a href="README_CN.md">中文</a> | <a href="README.md">English</a> |
-    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=es">Español</a> | 
-    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=fr">français</a> | 
-    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=ja">日本語</a> 
+    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=es">Español</a> |
+    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=fr">français</a> |
+    <a href="https://www.readme-i18n.com/ling-drag0n/CloudPaste?lang=ja">日本語</a>
     </p>
     <img width="100" height="100" src="https://img.icons8.com/dusk/100/paste.png" alt="paste"/>
-    <h3>Cloudflare-based online clipboard and file sharing service with Markdown editing and file upload support</h3>
+    <h3>🌩️ Serverless file management and Markdown sharing tool, supports multiple storage aggregation, online preview of 30+ file formats, and WebDAV mounting</h3>
 </div>
 
 <div align="center">
@@ -49,74 +49,53 @@
   </tr>
 </table>
 
-## ✨ Features
+## ✨ Core Features
 
-### 📝 Markdown Editing and Sharing
+### Cloudflare Native Architecture
 
-- **Powerful Editor**: Integrated with [Vditor](https://github.com/Vanessa219/vditor), supporting GitHub-flavored Markdown, math formulas, flowcharts, mind maps, and more
-- **Secure Sharing**: Content can be protected with access passwords
-- **Flexible Expiration**: Support for setting content expiration times
-- **Access Control**: Ability to limit maximum view count
-- **Customization**: Personalized share links and notes
-- **Support for Raw text direct links**: Similar to GitHub's Raw direct links, used for services launched via YAML configuration files
-- **Multi-format export**: Supports export to PDF, Markdown, HTML, PNG images, and Word documents
-- **Easy Sharing**: One-click link copying and QR code generation
-- **Auto-save**: Support for automatic draft saving
+- **Edge Computing**: Based on Cloudflare Workers, WorkFlow, and D1 database, with 300+ global nodes for nearby responses
+- **Zero Maintenance**: No server management required, automatic scaling, pay-per-request billing
+- **Integrated Deployment**: Frontend and backend packaged in the same Worker, saving time and effort
+- **Separate Deployment**: Optional frontend-backend separation, flexible to adapt to personal needs
 
-### 📤 File Upload and Management
+### Multi-Storage Support
 
-- **Multi-Storage Support**: Compatible with various S3(R2, B2, etc.)/WebDav/Local Storage(Docker) storage aggregation services
-- **Storage Configuration**: Visual interface for configuring multiple storage spaces, flexible switching of default storage sources
-- **Efficient Upload**: Upload to S3 storage via pre-signed URLs/resumable chunked uploads, while other storage types use streaming uploads
-- **Real-time Feedback**: Real-time upload progress display
-- **Custom Limits**: Single upload limits and maximum capacity restrictions
-- **Metadata Management**: File notes, passwords, expiration times, access restrictions
-- **Data Analysis**: File access statistics and trend analysis
-- **Direct Server Transfer**: Supports calling APIs for file upload, download, and other operations.
+- **S3 Compatible**: Cloudflare R2, Backblaze B2, AWS S3, Alibaba Cloud OSS, Tencent Cloud COS, MinIO, etc.
+- **Cloud Storage Integration**: WebDAV, OneDrive, Google Drive, Telegram, HuggingFace Database, GitHub API/Releases (read-only), etc.
+- **Local Storage**: Docker deployment supports local file system
+- **Smart Upload**: Frontend pre-signed direct upload + streaming upload + chunked resumable upload, with real-time progress display, minimizing CF limitations
+- **File Preview**: Direct preview support for 30+ formats (images, videos, audio, PDF, Office, code, e-books, etc.), others can be previewed through external IFrame embedding [KKFileview](https://github.com/kekingcn/kkFileView)
+- **Scheduled Tasks**: Support for automated tasks like cleaning upload sessions, storage synchronization, search index rebuilding, etc.
+- **Unified Management**: Visual configuration for multiple storage, flexible switching of default storage sources
 
-### 🛠 Convenient File/Text Operations
+### Powerful Markdown Editor
 
-- **Unified Management**: Support for file/text creation, deletion, and property modification
-- **Online Preview**: Online preview and direct link generation for common documents, images, and media files
-- **Sharing Tools**: Generation of short links and QR codes for cross-platform sharing
-- **Batch Management**: Batch operations and display for files/text
+- **Vditor Integration**: Support for GitHub-style Markdown, math formulas, flowcharts, mind maps
+- **Real-time Preview**: WYSIWYG editing experience
+- **Multi-format Export**: One-click export to PDF, HTML, PNG, Word
+- **Secure Sharing**: Password protection, expiration time, access count limits
+- **Raw Direct Links**: Similar to GitHub Raw, suitable for configuration file hosting
 
-### 🔄 WebDAV and Mount Point Management
+### WebDAV Protocol Support
 
-- **WebDAV Protocol Support**: Access and manage the file system via standard WebDAV protocol
-- **Network Drive Mounting**: Support for mounting by some third-party clients
-- **Flexible Mount Points**: Support for creating multiple mount points connected to different storage services
-- **Permission Control**: Fine-grained mount point access permission management
-- **API Key Integration**: WebDAV access authorization through API keys
-- **Large File Support**: Automatic use of multipart upload mechanism for large files
-- **Directory Operations**: Full support for directory creation, upload, deletion, renaming, and other operations
+- **Standard Protocol**: Supports mounting as a network drive with any WebDAV client
+- **Complete Operations**: Directory creation, file upload, deletion, renaming, moving
+- **Permission Control**: API key authorization, fine-grained access control
+- **Cache Optimization**: Configurable TTL, reducing upstream requests
 
-### 🔐 Lightweight Permission Management
+### Flexible Permission Management
 
-#### Administrator Permission Control
+- **API Keys**: Create multi-permission read/write keys, bound to specific storage paths
+- **Time Control**: Custom validity period, automatic expiration and manual revocation
+- **JWT Authentication**: Secure administrator authentication system
+- **PWA Support**: Can be installed as a desktop application, usable offline
 
-- **System Management**: Global system settings configuration
-- **Content Moderation**: Management of all user content
-- **Storage Management**: Addition, editing, and deletion of S3 storage services
-- **Permission Assignment**: Creation and permission management of API keys
-- **Data Analysis**: Complete access to statistical data
+### Multiple Deployment Methods
 
-#### API Key Permission Control
-
-- **Text Permissions**: Create/edit/delete text content
-- **File Permissions**: Upload/manage/delete files
-- **Storage Permissions**: Ability to select specific storage configurations
-- **Read/Write Separation**: Can set read-only or read-write permissions
-- **Time Control**: Custom validity period (from hours to months)
-- **Security Mechanism**: Automatic expiration and manual revocation functions
-
-### 💫 System Features
-
-- **High Adaptability**: Responsive design, adapting to mobile devices and desktops
-- **Multilingual**: Chinese/English bilingual interface support
-- **Visual Modes**: Bright/dark theme switching
-- **Secure Authentication**: JWT-based administrator authentication system
-- **Offline Experience**: PWA support, allowing offline use and desktop installation
+- **Automatic Deployment**: One-click deployment via GitHub Actions, supports automatic triggering
+- **Manual Deployment**: Wrangler CLI deployment, flexible and controllable
+- **Docker Deployment**: Frontend and backend images + Docker Compose one-click startup
+- **Multi-platform**: Supports Cloudflare, Vercel, ClawCloud, HuggingFace,etc.
 
 ## 🚀 Deployment Guide
 
@@ -128,10 +107,10 @@ Before starting deployment, please ensure you have prepared the following:
 - [ ] If using R2: Activate **Cloudflare R2** service and create a bucket (requires payment method)
 - [ ] If using Vercel: Register for a [Vercel](https://vercel.com) account
 - [ ] Configuration information for other S3 storage services:
-   - `S3_ACCESS_KEY_ID`
-   - `S3_SECRET_ACCESS_KEY`
-   - `S3_BUCKET_NAME`
-   - `S3_ENDPOINT`
+    - `S3_ACCESS_KEY_ID`
+    - `S3_SECRET_ACCESS_KEY`
+    - `S3_BUCKET_NAME`
+    - `S3_ENDPOINT`
 
 **The following tutorial may be outdated. For specific details, refer to: [Cloudpaste Online Deployment Documentation](https://doc.cloudpaste.qzz.io)**
 
@@ -141,13 +120,13 @@ Before starting deployment, please ensure you have prepared the following:
 ### 📑 Table of Contents
 
 - [Action Automated Deployment](#Action-Automated-Deployment)
-   - [Deployment Architecture Selection](#Deployment-Architecture-Selection)
-   - [Configure GitHub Repository](#Configure-GitHub-Repository)
-   - [Unified Deployment Tutorial (Recommended)](#Unified-Deployment-Tutorial-Recommended)
-   - [Separated Deployment Tutorial](#Separated-Deployment-Tutorial)
+    - [Deployment Architecture Selection](#Deployment-Architecture-Selection)
+    - [Configure GitHub Repository](#Configure-GitHub-Repository)
+    - [Unified Deployment Tutorial (Recommended)](#Unified-Deployment-Tutorial-Recommended)
+    - [Separated Deployment Tutorial](#Separated-Deployment-Tutorial)
 - [Manual Deployment](#Manual-Deployment)
-   - [Unified Manual Deployment (Recommended)](#Unified-Manual-Deployment-Recommended)
-   - [Separated Manual Deployment](#Separated-Manual-Deployment)
+    - [Unified Manual Deployment (Recommended)](#Unified-Manual-Deployment-Recommended)
+    - [Separated Manual Deployment](#Separated-Manual-Deployment)
 - [ClawCloud CloudPaste Deployment Tutorial](#ClawCloud-CloudPaste-Deployment-Tutorial)
 
 ---
@@ -206,8 +185,8 @@ Add the following Secrets:
 2. Click **Create Token**
 3. Select **Edit Cloudflare Workers** template
 4. **Add additional permissions**:
-   - Account → **D1** → **Edit**
-   - Account → **Cloudflare Pages** → **Edit** (if using separated deployment)
+    - Account → **D1** → **Edit**
+    - Account → **Cloudflare Pages** → **Edit** (if using separated deployment)
 5. Click **Continue to summary** → **Create Token**
 6. **Copy the Token** and save it to GitHub Secrets
 
@@ -229,8 +208,8 @@ If you want to use the visual control panel to manage auto-deployment switches, 
 2. Click **Generate new token** → **Generate new token (classic)**
 3. Set Token name (e.g., `CloudPaste Deployment Control`)
 4. Select permissions:
-   - ✅ **repo** (Full repository access)
-   - ✅ **workflow** (Workflow permissions)
+    - ✅ **repo** (Full repository access)
+    - ✅ **workflow** (Workflow permissions)
 5. Click **Generate token**
 6. Copy the Token and save as Secret `ACTIONS_VAR_TOKEN`
 
@@ -296,8 +275,8 @@ Your CloudPaste has been successfully deployed! Visit the URL above to use it.
 
 1. The database will be automatically initialized on first visit
 2. Log in with the default admin account:
-   - Username: `admin`
-   - Password: `admin123`
+    - Username: `admin`
+    - Password: `admin123`
 3. **⚠️ Important: Change the default admin password immediately!**
 4. Configure your S3-compatible storage service in the admin panel
 5. (Optional) Bind a custom domain in Cloudflare Dashboard
@@ -373,9 +352,9 @@ Method 2: Auto Trigger
 2. Navigate to **Pages** → **cloudpaste-frontend**
 3. Click **Settings** → **Environment variables**
 4. Add environment variable:
-   - **Name**: `VITE_BACKEND_URL`
-   - **Value**: Your backend Worker URL (e.g., `https://cloudpaste-backend.your-account.workers.dev`)
-   - **Note**: No trailing `/`, custom domain recommended
+    - **Name**: `VITE_BACKEND_URL`
+    - **Value**: Your backend Worker URL (e.g., `https://cloudpaste-backend.your-account.workers.dev`)
+    - **Note**: No trailing `/`, custom domain recommended
 
 **<span style="color:red">⚠️ Must fill in the complete backend domain, format: https://xxxx.com</span>**
 
@@ -410,8 +389,8 @@ Install Command: npm install
 ```
 
 3. Configure environment variables:
-   - Name: `VITE_BACKEND_URL`
-   - Value: Your backend Worker URL
+    - Name: `VITE_BACKEND_URL`
+    - Value: Your backend Worker URL
 4. Click **Deploy** button to deploy
 
 **☝️ Choose either Cloudflare Pages or Vercel**
@@ -604,12 +583,12 @@ cd CloudPaste/backend
 
    **Method 2**: Via Cloudflare Dashboard
 
-   1. Log in to [Cloudflare Dashboard](https://dash.cloudflare.com/)
-   2. Select "Pages"
-   3. Click "Create a project" → "Direct Upload"
-   4. Upload files from the `dist` directory
-   5. Set project name (e.g., "cloudpaste-frontend")
-   6. Click "Save and Deploy"
+    1. Log in to [Cloudflare Dashboard](https://dash.cloudflare.com/)
+    2. Select "Pages"
+    3. Click "Create a project" → "Direct Upload"
+    4. Upload files from the `dist` directory
+    5. Set project name (e.g., "cloudpaste-frontend")
+    6. Click "Save and Deploy"
 
 #### Vercel
 
@@ -676,8 +655,8 @@ Then the frontend, as shown in the figure (for reference only):
 ### 📑 Table of Contents
 
 - [Docker Command Line Deployment](#Docker-Command-Line-Deployment)
-   - [Backend Docker Deployment](#Backend-Docker-Deployment)
-   - [Frontend Docker Deployment](#Frontend-Docker-Deployment)
+    - [Backend Docker Deployment](#Backend-Docker-Deployment)
+    - [Frontend Docker Deployment](#Frontend-Docker-Deployment)
 - [Docker Compose One-Click Deployment](#Docker-Compose-One-Click-Deployment)
 
 ---
@@ -753,36 +732,36 @@ Using Docker Compose allows you to deploy both frontend and backend services wit
 version: "3.8"
 
 services:
-   frontend:
-      image: dragon730/cloudpaste-frontend:latest
-      environment:
-         - BACKEND_URL=https://xxx.com # Fill in the backend service address
-      ports:
-         - "8080:80" #"127.0.0.1:8080:80"
-      depends_on:
-         - backend # Depends on backend service
-      networks:
-         - cloudpaste-network
-      restart: unless-stopped
+  frontend:
+    image: dragon730/cloudpaste-frontend:latest
+    environment:
+      - BACKEND_URL=https://xxx.com # Fill in the backend service address
+    ports:
+      - "8080:80" #"127.0.0.1:8080:80"
+    depends_on:
+      - backend # Depends on backend service
+    networks:
+      - cloudpaste-network
+    restart: unless-stopped
 
-   backend:
-      image: dragon730/cloudpaste-backend:latest
-      environment:
-         - NODE_ENV=production
-         - PORT=8787
-         - ENCRYPTION_SECRET=custom-key # Please modify this to your own security key
-         - TASK_WORKER_POOL_SIZE=2
-      volumes:
-         - ./sql_data:/data # Data persistence
-      ports:
-         - "8787:8787" #"127.0.0.1:8787:8787"
-      networks:
-         - cloudpaste-network
-      restart: unless-stopped
+  backend:
+    image: dragon730/cloudpaste-backend:latest
+    environment:
+      - NODE_ENV=production
+      - PORT=8787
+      - ENCRYPTION_SECRET=custom-key # Please modify this to your own security key
+      - TASK_WORKER_POOL_SIZE=2
+    volumes:
+      - ./sql_data:/data # Data persistence
+    ports:
+      - "8787:8787" #"127.0.0.1:8787:8787"
+    networks:
+      - cloudpaste-network
+    restart: unless-stopped
 
 networks:
-   cloudpaste-network:
-      driver: bridge
+  cloudpaste-network:
+    driver: bridge
 ```
 
 2. Start the services
@@ -897,13 +876,13 @@ server {
 
 ```json
 [
-   {
-      "AllowedOrigins": ["http://localhost:3000", "https://replace-with-your-frontend-domain"],
-      "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
-      "AllowedHeaders": ["*"],
-      "ExposeHeaders": ["ETag"],
-      "MaxAgeSeconds": 3600
-   }
+  {
+    "AllowedOrigins": ["http://localhost:3000", "https://replace-with-your-frontend-domain"],
+    "AllowedMethods": ["GET", "PUT", "POST", "DELETE", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
 ]
 ```
 
@@ -1037,27 +1016,27 @@ Replace <bucketName> with your bucket name. For allowedOrigins in the cross-orig
 
 5. **Configure MinIO in CloudPaste**
 
-   - Log in to CloudPaste admin panel
-   - Go to "S3 Storage Settings" → "Add Storage Configuration"
-   - Select "Other S3-compatible service" as provider
-   - Enter details:
-      - Name: Custom name
-      - Endpoint URL: MinIO service URL (e.g., `https://minio.example.com`)
-      - Bucket Name: Pre-created bucket
-      - Access Key ID: Your Access Key
-      - Secret Key: Your Secret Key
-      - Region: Leave empty
-      - Path-Style Access: MUST ENABLE!
-   - Click "Test Connection" to verify
-   - Save settings
+    - Log in to CloudPaste admin panel
+    - Go to "S3 Storage Settings" → "Add Storage Configuration"
+    - Select "Other S3-compatible service" as provider
+    - Enter details:
+        - Name: Custom name
+        - Endpoint URL: MinIO service URL (e.g., `https://minio.example.com`)
+        - Bucket Name: Pre-created bucket
+        - Access Key ID: Your Access Key
+        - Secret Key: Your Secret Key
+        - Region: Leave empty
+        - Path-Style Access: MUST ENABLE!
+    - Click "Test Connection" to verify
+    - Save settings
 
 6. **Troubleshooting**
 
-   - **Note**: If using Cloudflare's CDN, you may need to add `proxy_set_header Accept-Encoding "identity"`, and there are caching issues to consider. It is recommended to use only DNS resolution.
-   - **403 Error**: Ensure reverse proxy includes `proxy_cache off` & `proxy_buffering off`
-   - **Preview Issues**: Verify `MINIO_SERVER_URL` & `MINIO_BROWSER_REDIRECT_URL` are correctly set
-   - **Upload Failures**: Check CORS settings; allowed origins must include frontend domain
-   - **Console Unreachable**: Verify WebSocket config, especially `Connection "upgrade"`
+    - **Note**: If using Cloudflare's CDN, you may need to add `proxy_set_header Accept-Encoding "identity"`, and there are caching issues to consider. It is recommended to use only DNS resolution.
+    - **403 Error**: Ensure reverse proxy includes `proxy_cache off` & `proxy_buffering off`
+    - **Preview Issues**: Verify `MINIO_SERVER_URL` & `MINIO_BROWSER_REDIRECT_URL` are correctly set
+    - **Upload Failures**: Check CORS settings; allowed origins must include frontend domain
+    - **Console Unreachable**: Verify WebSocket config, especially `Connection "upgrade"`
 
 ## More S3-related configurations to come......
 
@@ -1074,10 +1053,10 @@ CloudPaste provides simple WebDAV protocol support, allowing you to mount storag
 
 - **WebDAV Base URL**: `https://your-backend-domain/dav`
 - **Supported Authentication Methods**:
-   - Basic Authentication (username+password)
+    - Basic Authentication (username+password)
 - **Supported Permission Types**:
-   - Administrator accounts - Full operation permissions
-   - API keys - Requires enabled mount permission (mount_permission)
+    - Administrator accounts - Full operation permissions
+    - API keys - Requires enabled mount permission (mount_permission)
 
 ### Permission Configuration
 
@@ -1096,8 +1075,8 @@ For a more secure access method, it is recommended to create a dedicated API key
 2. Navigate to "API Key Management"
 3. Create a new API key, **ensure "Mount Permission" is enabled**
 4. Usage method:
-   - **Username**: API key value
-   - **Password**: The same API key value as the username
+    - **Username**: API key value
+    - **Password**: The same API key value as the username
 
 ### NGINX Reverse Proxy Configuration
 
@@ -1137,20 +1116,20 @@ location /dav {
 
 1. **Connection Problems**:
 
-   - Confirm the WebDAV URL format is correct
-   - Verify that authentication credentials are valid
-   - Check if the API key has mount permission
+    - Confirm the WebDAV URL format is correct
+    - Verify that authentication credentials are valid
+    - Check if the API key has mount permission
 
 2. **Permission Errors**:
 
-   - Confirm the account has the required permissions
-   - Administrator accounts should have full permissions
-   - API keys need to have mount permission specifically enabled
+    - Confirm the account has the required permissions
+    - Administrator accounts should have full permissions
+    - API keys need to have mount permission specifically enabled
 
 3. **⚠️⚠️ WebDAV Upload Issues**:
 
-   - The upload size for webdav deployed by Workers may be limited by CF's CDN restrictions to around 100MB, resulting in a 413 error.
-   - For Docker deployments, just pay attention to the nginx proxy configuration, any upload mode is acceptable
+    - The upload size for webdav deployed by Workers may be limited by CF's CDN restrictions to around 100MB, resulting in a 413 error.
+    - For Docker deployments, just pay attention to the nginx proxy configuration, any upload mode is acceptable
 
 </details>
 
@@ -1208,8 +1187,8 @@ location /dav {
 
 4. **Configure environment variables**
 
-   - In the `backend` directory, create a `wrangler.toml` file to set development environment variables
-   - In the `frontend` directory, configure the `.env.development` file to set frontend environment variables
+    - In the `backend` directory, create a `wrangler.toml` file to set development environment variables
+    - In the `frontend` directory, configure the `.env.development` file to set frontend environment variables
 
 5. **Start development servers**
 
@@ -1369,9 +1348,9 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
   <a href="https://afdian.com/a/drag0n"><img width="200" src="https://pic1.afdiancdn.com/static/img/welcome/button-sponsorme.png" alt=""></a>
 
-   - **Sponsors**: A huge thank you to the following sponsors for their support of this project!!
+    - **Sponsors**: A huge thank you to the following sponsors for their support of this project!!
 
-     [![Sponsors](https://afdian.730888.xyz/image)](https://afdian.com/a/drag0n)
+      [![Sponsors](https://afdian.730888.xyz/image)](https://afdian.com/a/drag0n)
 
 - **Contributors**: Thanks to the following contributors for their selfless contributions to this project!
 

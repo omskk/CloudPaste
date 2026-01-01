@@ -12,6 +12,27 @@ export class FileShareService {
     this.records = new ShareRecordService(db, encryptionSecret, repositoryFactory);
   }
 
+  _getTelegramShareMaxDirectUploadBytes(storageConfig) {
+    const mode = String(storageConfig?.bot_api_mode || "official").trim().toLowerCase();
+    if (mode === "self_hosted") {
+      // 自建 Bot API Server：按你的后端能力决定限制，这里不强行限制
+      return Infinity;
+    }
+    // 官方 Bot API：本项目约定 share 直传只支持小文件，避免“能传不能下/不能预览”的坑
+    return 20 * 1024 * 1024;
+  }
+
+  _assertTelegramShareDirectUploadAllowed(storageConfig, fileSizeBytes) {
+    const size = Number(fileSizeBytes) || 0;
+    if (size <= 0) return;
+    const maxBytes = this._getTelegramShareMaxDirectUploadBytes(storageConfig);
+    if (Number.isFinite(maxBytes) && size > maxBytes) {
+      throw new ValidationError(
+        "Telegram 分享上传：未勾选“自建 Bot API Server”时仅支持 ≤ 20MB；更大的文件请用“挂载浏览器”的分片上传，或勾选自建。",
+      );
+    }
+  }
+
   _resolveAclSubject(userType, userIdOrInfo) {
     if (userType !== UserType.API_KEY) {
       return { subjectType: null, subjectId: null };
@@ -107,7 +128,16 @@ export class FileShareService {
   }
 
   // 预签名初始化
-  async createPresignedShareUpload({ filename, fileSize, contentType, path = null, storage_config_id = null, userIdOrInfo, userType }) {
+  async createPresignedShareUpload({
+    filename,
+    fileSize,
+    contentType,
+    path = null,
+    storage_config_id = null,
+    sha256 = null,
+    userIdOrInfo,
+    userType,
+  }) {
     if (!filename) throw new ValidationError("缺少 filename");
     await this.limit.check(fileSize);
 
@@ -122,7 +152,14 @@ export class FileShareService {
     if (!cfg) throw new ValidationError("未找到可用的存储配置，无法生成预签名URL");
 
     const store = new ObjectStore(this.db, this.encryptionSecret, this.repositoryFactory);
-    const presign = await store.presignUpload({ storage_config_id: cfg.id, directory: path, filename, fileSize, contentType });
+    const presign = await store.presignUpload({
+      storage_config_id: cfg.id,
+      directory: path,
+      filename,
+      fileSize,
+      contentType,
+      sha256,
+    });
     // 配额校验：考虑覆盖同路径时排除旧记录体积
     const fileRepo = this.repositoryFactory.getFileRepository();
     if (!cfg.storage_type) throw new ValidationError("存储配置缺少 storage_type");
@@ -137,11 +174,30 @@ export class FileShareService {
       provider_type: presign.provider_type,
       storage_config_id: presign.storage_config_id,
       headers: presign.headers || undefined,
+      sha256: presign.sha256 || (sha256 ? String(sha256) : undefined),
+      skipUpload: presign.skipUpload === true ? true : undefined,
     };
   }
 
   // 预签名提交
-  async commitPresignedShareUpload({ key, storage_config_id, filename, size, etag, slug, remark, password, expiresIn, maxViews, useProxy, originalFilename, userIdOrInfo, userType, request }) {
+  async commitPresignedShareUpload({
+    key,
+    storage_config_id,
+    filename,
+    size,
+    etag,
+    sha256 = null,
+    slug,
+    remark,
+    password,
+    expiresIn,
+    maxViews,
+    useProxy,
+    originalFilename,
+    userIdOrInfo,
+    userType,
+    request,
+  }) {
     await this.limit.check(Number(size));
     // 必须包含 key + storage_config_id
     const finalKey = key;
@@ -165,9 +221,17 @@ export class FileShareService {
 
     const { ObjectStore } = await import("../storage/object/ObjectStore.js");
     const store = new ObjectStore(this.db, this.encryptionSecret, this.repositoryFactory);
-    const commit = await store.commitUpload({ storage_config_id: storageConfig.id, key: finalKey, filename, size, etag });
     const { getEffectiveMimeType } = await import("../utils/fileUtils.js");
     const mimeType = getEffectiveMimeType(undefined, filename);
+    const commit = await store.commitUpload({
+      storage_config_id: storageConfig.id,
+      key: finalKey,
+      filename,
+      size,
+      etag,
+      sha256,
+      contentType: mimeType,
+    });
 
     // 根据命名策略决定是否覆盖更新记录
     const { shouldUseRandomSuffix } = await import("../utils/common.js");
@@ -217,6 +281,11 @@ export class FileShareService {
     });
     if (!cfg) throw new ValidationError("未找到可用的存储配置，无法上传");
 
+    // Telegram（Bot API）share 直传：只支持小文件（不走断点续传）
+    if (String(cfg.storage_type) === "TELEGRAM") {
+      this._assertTelegramShareDirectUploadAllowed(cfg, normalizedSize);
+    }
+
     const store = new ObjectStore(this.db, this.encryptionSecret, this.repositoryFactory);
     // 预先计算最终Key用于配额校验（考虑命名策略与冲突重命名）
     const plannedKey = await store.getPlannedKey(cfg.id, options.path || null, storedFilename);
@@ -232,6 +301,8 @@ export class FileShareService {
       size: normalizedSize,
       contentType: mimeType,
       uploadId: options.uploadId || null,
+      userIdOrInfo,
+      userType,
     });
 
     const { shouldUseRandomSuffix } = await import("../utils/common.js");
@@ -284,6 +355,11 @@ export class FileShareService {
     });
     if (!cfg) throw new ValidationError("未找到可用的存储配置，无法上传");
 
+    // Telegram（Bot API）share 表单上传：只支持小文件（不走断点续传）
+    if (String(cfg.storage_type) === "TELEGRAM") {
+      this._assertTelegramShareDirectUploadAllowed(cfg, normalizedSize);
+    }
+
     const store = new ObjectStore(this.db, this.encryptionSecret, this.repositoryFactory);
 
     // 预先计算最终Key用于配额校验（考虑命名策略与冲突重命名）
@@ -301,6 +377,8 @@ export class FileShareService {
       size: normalizedSize,
       contentType: mimeType,
       uploadId: options.uploadId || null,
+      userIdOrInfo,
+      userType,
     });
 
     const { shouldUseRandomSuffix } = await import("../utils/common.js");

@@ -51,14 +51,12 @@
               :disabled="!storageConfigs.length || loading || isUploading"
               required
               @change="onStorageConfigChange"
-            >
+            > 
               <option value="" disabled selected>{{ storageConfigs.length ? t("file.selectStorage") : t("file.noStorage") }}</option>
               <option v-for="config in storageConfigs" :key="config.id" :value="config.id">{{ formatStorageOptionLabel(config) }}</option>
             </select>
             <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" :class="darkMode ? 'text-gray-400' : 'text-gray-500'" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-              </svg>
+              <IconChevronDown size="md" :class="darkMode ? 'text-gray-400' : 'text-gray-500'" aria-hidden="true" />
             </div>
           </div>
         </div>
@@ -113,10 +111,11 @@
               slugError ? (darkMode ? 'border-red-500' : 'border-red-600') : '',
             ]"
             :placeholder="t('file.customLinkPlaceholder')"
-            :disabled="isUploading"
+            :disabled="isUploading || isMultiFileUpload"
             @input="validateCustomLink"
           />
-          <p v-if="slugError" class="mt-1 text-sm text-red-600 dark:text-red-400">{{ slugError }}</p>
+          <p v-if="isMultiFileUpload" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('file.multiFileSlugDisabled') }}</p>
+          <p v-else-if="slugError" class="mt-1 text-sm text-red-600 dark:text-red-400">{{ slugError }}</p>
           <p v-else class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("file.onlyAllowedChars") }}</p>
         </div>
 
@@ -197,14 +196,7 @@
               : 'bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500 focus:ring-offset-white',
           ]"
         >
-          <svg v-if="isUploading" class="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path
-              class="opacity-75"
-              fill="currentColor"
-              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-            ></path>
-          </svg>
+          <IconRefresh v-if="isUploading" size="sm" class="animate-spin -ml-1 mr-2" aria-hidden="true" />
           {{ isUploading ? t("file.loading") : t("file.upload") }}
         </button>
 
@@ -220,25 +212,9 @@
               : 'bg-gray-100 border-gray-300 text-gray-700 hover:bg-red-50 hover:text-red-600 hover:border-red-300 focus:ring-gray-300 focus:ring-offset-white'
           "
         >
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <IconClose size="sm" class="mr-1" aria-hidden="true" />
           {{ t("file.cancel") }}
         </button>
-      </div>
-    </div>
-
-    <!-- 错误显示 -->
-    <div v-if="errorMessage" class="mt-4 p-3 rounded-md" :class="darkMode ? 'bg-red-900/20 border border-red-700' : 'bg-red-50 border border-red-200'">
-      <div class="flex items-center">
-        <svg class="w-4 h-4 mr-2 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-          <path
-            fill-rule="evenodd"
-            d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-            clip-rule="evenodd"
-          />
-        </svg>
-        <span class="text-sm" :class="darkMode ? 'text-red-300' : 'text-red-700'">{{ errorMessage }}</span>
       </div>
     </div>
 
@@ -248,16 +224,14 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
+import { IconChevronDown, IconClose, IconRefresh } from "@/components/icons";
+import { createLogger } from "@/utils/logger.js";
 
 import Dashboard from "@uppy/dashboard";
 
 // 导入Uppy样式
 import "@uppy/core/dist/style.min.css";
 import "@uppy/dashboard/dist/style.min.css";
-import "@uppy/webcam/dist/style.min.css";
-import "@uppy/screen-capture/dist/style.min.css";
-import "@uppy/audio/dist/style.min.css";
-import "@uppy/image-editor/dist/style.min.css";
 
 // 导入共享CSS
 import "@/styles/uppy-dashboard.css";
@@ -274,7 +248,9 @@ import UppyDashboardContainer from "@/components/uppy/UppyDashboardContainer.vue
 import { resolveDriverByConfigId } from "@/modules/storage-core/drivers/registry.js";
 import { useShareUploadController, useShareUploadDomain, useUploadService } from "@/modules/upload";
 import { useShareSettingsForm } from "@/composables/upload/useShareSettingsForm.js";
-import { useFileshareService } from "@/modules/fileshare";
+// ⚠️ 性能：不要从 "@/modules/fileshare" 聚合入口导入
+// 因为它会连带引入 FileView / FileManagementView 等大组件，导致上传页首屏 JS 体积暴涨。
+import { useFileshareService } from "@/modules/fileshare/fileshareService.js";
 import { createUppyPluginManager } from "@/modules/storage-core/uppy/UppyPluginManager.js";
 import { formatFileSize } from "@/utils/fileUtils.js";
 import { validateUrlInfo, fetchUrlContent } from "@/api/services/urlUploadService.js";
@@ -288,17 +264,17 @@ const props = defineProps({
 });
 
 // 事件
-const emit = defineEmits(["upload-success", "upload-error", "refresh-files", "share-results"]);
+const emit = defineEmits(["upload-success", "upload-error", "share-results"]);
 
 // 国际化
 const { locale, t } = useI18n();
+const log = createLogger("UppyShareUploader");
 
 // 使用Composables
 const { uppyInstance, initializeUppy, destroyUppy, snapshotFiles, restoreFiles } = useUppyCore();
 const { fileCount } = useUppyEvents({
   uppy: uppyInstance,
   onFileAdded: (file) => {
-    console.log("[UppyShareUploader] 文件已添加:", file.name);
     if (maxUploadBytes.value && file?.size > maxUploadBytes.value) {
       errorMessage.value = t("file.maxSizeExceeded", { size: formatMaxFileSize() });
       try {
@@ -309,10 +285,9 @@ const { fileCount } = useUppyEvents({
     errorMessage.value = "";
   },
   onFileRemoved: (file) => {
-    console.log("[UppyShareUploader] 文件已移除:", file.name);
   },
   onRestrictionFailed: (file, error) => {
-    console.warn("[UppyShareUploader] 文件未通过限制", file?.name, error);
+    log.warn("[UppyShareUploader] 文件未通过限制", file?.name, error);
     errorMessage.value = error?.message || t("file.maxSizeExceeded", { size: formatMaxFileSize() });
   },
   onError: (error) => {
@@ -325,7 +300,6 @@ const { fileCount } = useUppyEvents({
 useUppyPaste({
   uppy: uppyInstance,
   onPaste: (file) => {
-    console.log("[UppyShareUploader] 粘贴文件:", file.name);
   },
 });
 
@@ -415,7 +389,7 @@ watch(currentStorageConfig, (config) => {
     const allowPresign = shareCaps.presigned === true || shareCaps.presign === true || driverType === "S3";
     canUsePresignMode.value = allowPresign;
   } catch (error) {
-    console.warn("[UppyShareUploader] 解析驱动失败，使用存储类型回退", error);
+    log.warn("[UppyShareUploader] 解析驱动失败，使用存储类型回退", error);
     canUsePresignMode.value = storageType === "S3";
   }
 
@@ -428,6 +402,7 @@ watch(currentStorageConfig, (config) => {
 // 计算属性
 const isSlugValid = computed(() => !formData.slug || !slugError.value);
 const isMaxViewsValid = computed(() => Number(formData.max_views) >= 0);
+const isMultiFileUpload = computed(() => fileCount.value > 1);
 const canStartUpload = computed(() => {
   return fileCount.value > 0 && !isUploading.value && !!formData.storage_config_id && isSlugValid.value && isMaxViewsValid.value;
 });
@@ -455,7 +430,7 @@ const loadMaxUploadSize = async () => {
       maxFileSizeMB.value = size;
     }
   } catch (error) {
-    console.warn("[UppyShareUploader] 获取最大上传大小失败", error);
+    log.warn("[UppyShareUploader] 获取最大上传大小失败", error);
   }
 };
 
@@ -529,11 +504,11 @@ const setupUppy = async ({ preserveFiles = false } = {}) => {
     });
 
     uppyInstance.value.use(Dashboard, getDashboardConfig());
-    pluginManager.addPluginsToUppy();
+    await pluginManager.addPluginsToUppy();
 
     restoreFiles(preservedFiles);
   } catch (error) {
-    console.error("[UppyShareUploader] 初始化失败:", error);
+    log.error("[UppyShareUploader] 初始化失败:", error);
     errorMessage.value = t("file.messages.uploadFailed", { message: error.message });
   }
 };
@@ -571,6 +546,17 @@ const validateCustomLink = (event) => {
   return validateSlug();
 };
 
+// 多文件上传：禁用自定义后缀（slug），并在文件数变为 2+ 时自动清空
+watch(
+  () => fileCount.value,
+  (count) => {
+    if (count > 1 && formData.slug) {
+      handleSlugInput('');
+    }
+  },
+  { immediate: true },
+);
+
 /**
  * 验证最大查看次数
  */
@@ -599,10 +585,10 @@ const buildShareResultEntry = (item) => {
   }
 
   // 预览与下载统一依赖 Link JSON + share URL：
-  // - 预览：优先使用 fileshareService 基于 Link JSON 构造的预览入口，其次退回分享页
-  // - 下载：始终使用 Down 路由（getPermanentDownloadUrl）
+  // - 预览：优先使用 fileshareService 基于 Link JSON 构造的 previewUrl，其次退回分享页
+  // - 下载：基于 Link JSON 构造的 downloadUrl；downloadUrl=null 时无下载入口
   const previewUrl = fileshareService.getPermanentPreviewUrl(record) || shareUrl;
-  const downloadUrl = slug ? fileshareService.getPermanentDownloadUrl({ slug }) : "";
+  const downloadUrl = fileshareService.getPermanentDownloadUrl(record);
 
   return {
     id: record.id || meta.fileId || item?.id || slug,
@@ -622,9 +608,6 @@ const buildShareResultEntry = (item) => {
 const extractShareResults = (uploadResults = []) => {
   const normalized = uploadResults.map((item) => {
     const entry = buildShareResultEntry(item);
-    if (!entry) {
-      console.debug("[UppyShareUploader] missing shareRecord for item", item);
-    }
     return entry;
   });
   return normalized.filter((entry) => entry && entry.shareUrl);
@@ -651,7 +634,6 @@ const flushPendingShareResults = () => {
   });
 
   if (!ready.length) {
-    console.debug("[UppyShareUploader] pending share records not ready", waiting.map((item) => item.id));
     pendingShareItems.value = waiting;
     return;
   }
@@ -679,6 +661,11 @@ const startUpload = async () => {
     return;
   }
 
+  // 多文件上传时强制禁用自定义后缀
+  if (isMultiFileUpload.value && formData.slug) {
+    handleSlugInput('');
+  }
+
   // 前置检查
   if (!formData.storage_config_id) {
     errorMessage.value = t("file.messages.noStorageConfig");
@@ -688,7 +675,7 @@ const startUpload = async () => {
     errorMessage.value = t("file.messages.negativeMaxViews");
     return;
   }
-  if (formData.slug && !validateSlug()) {
+  if (!isMultiFileUpload.value && formData.slug && !validateSlug()) {
     errorMessage.value = slugError.value;
     return;
   }
@@ -702,7 +689,9 @@ const startUpload = async () => {
     emit("share-results", []);
     resetShareCaches();
 
-    const basePayload = buildPayloadForFile(formData);
+    const basePayload = buildPayloadForFile(
+      isMultiFileUpload.value ? { ...formData, slug: '' } : formData,
+    );
 
     let session;
     if (uploadMode.value === "presigned" && canUsePresignMode.value) {
@@ -719,11 +708,10 @@ const startUpload = async () => {
             }
           },
           onError: ({ file, error }) => {
-            console.error("[UppyShareUploader] 上传错误:", file?.name, error);
+            log.error("[UppyShareUploader] 上传错误:", file?.name, error);
             errorMessage.value = error?.message || t("file.messages.uploadFailed");
-          },
+          }, 
           onComplete: (result) => {
-            console.log("[UppyShareUploader] 上传完成:", result);
             const failedDescriptors = (result?.failed || []).map((item) =>
               buildErrorDescriptor(item?.error || new Error(t("file.messages.uploadFailed")))
             );
@@ -740,7 +728,6 @@ const startUpload = async () => {
               emit("share-results", normalizedShareResults);
               resetShareCaches();
             } else if (pendingShareItems.value.length) {
-              console.debug("[UppyShareUploader] waiting for share-record events", pendingShareItems.value.map((item) => item.id));
             }
 
             flushPendingShareResults();
@@ -751,7 +738,6 @@ const startUpload = async () => {
                 emit("upload-error", new Error(summary.message));
               } else if (summary.kind === "success") {
                 emit("upload-success", uploadResults);
-                emit("refresh-files");
                 formData.slug = "";
                 formData.remark = "";
                 formData.password = "";
@@ -766,9 +752,8 @@ const startUpload = async () => {
             }
 
             disposeShareSession();
-          },
+          }, 
           onShareRecord: ({ file, shareRecord }) => {
-            console.debug("[UppyShareUploader] share-record event", file?.id, shareRecord);
             if (file?.id && shareRecord) {
               shareRecordMap.set(file.id, shareRecord);
             }
@@ -791,11 +776,10 @@ const startUpload = async () => {
           }
         },
         onError: ({ file, error }) => {
-          console.error("[UppyShareUploader] 上传错误:", file?.name, error);
+          log.error("[UppyShareUploader] 上传错误:", file?.name, error);
           errorMessage.value = error?.message || t("file.messages.uploadFailed");
         },
         onComplete: (result) => {
-          console.log("[UppyShareUploader] 上传完成:", result);
           const failedDescriptors = (result?.failed || []).map((item) =>
             buildErrorDescriptor(item?.error || new Error(t("file.messages.uploadFailed")))
           );
@@ -812,7 +796,6 @@ const startUpload = async () => {
             emit("share-results", normalizedShareResults);
             resetShareCaches();
           } else if (pendingShareItems.value.length) {
-            console.debug("[UppyShareUploader] waiting for share-record events", pendingShareItems.value.map((item) => item.id));
           }
 
           flushPendingShareResults();
@@ -823,7 +806,6 @@ const startUpload = async () => {
               emit("upload-error", new Error(summary.message));
             } else if (summary.kind === "success") {
               emit("upload-success", uploadResults);
-              emit("refresh-files");
               formData.slug = "";
               formData.remark = "";
               formData.password = "";
@@ -840,7 +822,6 @@ const startUpload = async () => {
           disposeShareSession();
         },
         onShareRecord: ({ file, shareRecord }) => {
-          console.debug("[UppyShareUploader] share-record event", file?.id, shareRecord);
           if (file?.id && shareRecord) {
             shareRecordMap.set(file.id, shareRecord);
           }
@@ -858,7 +839,7 @@ const startUpload = async () => {
 
     await session.start();
   } catch (error) {
-    console.error("[UppyShareUploader] 上传失败", error);
+    log.error("[UppyShareUploader] 上传失败", error);
     errorMessage.value = error.message || t("file.messages.uploadFailed");
     emit("upload-error", error);
     disposeShareSession();

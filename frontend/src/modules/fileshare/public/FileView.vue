@@ -10,14 +10,7 @@
     </div>
 
     <div v-if="error" class="error-container py-12 px-3 sm:px-6 max-w-6xl mx-auto text-center">
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto mb-4 text-red-600 dark:text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="1.5"
-          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-        />
-      </svg>
+      <IconExclamation class="h-16 w-16 mx-auto mb-4 text-red-600 dark:text-red-500" />
       <h2 class="text-2xl font-bold mb-2 text-gray-900 dark:text-white">{{ t("fileView.error") }}</h2>
       <p class="text-lg mb-6 text-gray-600 dark:text-gray-300">{{ error }}</p>
       <a
@@ -30,17 +23,20 @@
 
     <!-- 删除成功提示 -->
     <div v-else-if="showDeleteSuccess" class="success-container py-12 px-3 sm:px-6 max-w-6xl mx-auto text-center">
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto mb-4 text-green-600 dark:text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 13l4 4L19 7" />
-      </svg>
+      <IconCheck class="h-16 w-16 mx-auto mb-4 text-green-600 dark:text-green-500" />
       <h2 class="text-2xl font-bold mb-2 text-gray-900 dark:text-white">{{ t("fileView.actions.deleteSuccess") }}</h2>
       <p class="text-lg mb-6 text-gray-600 dark:text-gray-300">{{ t("fileView.actions.redirectMessage") }}</p>
       <div class="animate-pulse text-gray-500 dark:text-gray-400">{{ redirectCountdown }} {{ t("fileView.actions.redirecting") }}</div>
     </div>
 
     <div v-else-if="loading" class="loading-container py-12 px-3 sm:px-6 max-w-6xl mx-auto text-center">
-      <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 mx-auto mb-4 border-blue-600 dark:border-blue-500"></div>
-      <p class="text-lg text-gray-600 dark:text-gray-300">{{ t("fileView.loading") }}</p>
+      <LoadingIndicator
+        :text="t('fileView.loading')"
+        :dark-mode="darkMode"
+        size="4xl"
+        :icon-class="darkMode ? 'text-blue-400' : 'text-blue-600'"
+        :text-class="darkMode ? 'text-gray-300' : 'text-gray-600'"
+      />
     </div>
 
     <div v-else class="file-container flex-1 flex flex-col py-8 px-4 max-w-4xl mx-auto w-full">
@@ -52,7 +48,7 @@
       <!-- 文件信息和操作界面 -->
       <div v-else class="file-content flex flex-col flex-1">
         <!-- 文件信息 -->
-        <FileViewInfo :fileInfo="fileInfo" class="flex-1 flex flex-col" :darkMode="darkMode" />
+        <FileViewInfo :fileInfo="fileInfo" :darkMode="darkMode" />
 
         <!-- 文件操作按钮 -->
         <FileViewActions :fileInfo="fileInfo" :darkMode="darkMode" @edit="openEditModal" @delete="handleFileDeleted" @refresh-file-info="refreshFileInfo" />
@@ -66,15 +62,21 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, defineProps, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useIntervalFn } from "@vueuse/core";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/authStore.js";
 import { useFileshareService } from "@/modules/fileshare/fileshareService.js";
 import { useFileShareStore } from "@/modules/fileshare/fileShareStore.js";
 import { useGlobalMessage } from "@/composables/core/useGlobalMessage.js";
+import { setFilePassword } from "@/utils/filePasswordUtils.js";
+import { createLogger } from "@/utils/logger.js";
+import { IconCheck, IconExclamation } from "@/components/icons";
+import LoadingIndicator from "@/components/common/LoadingIndicator.vue";
 
 const { t } = useI18n();
+const log = createLogger("FileView");
 const fileshareService = useFileshareService();
 const fileShareStore = useFileShareStore();
 const { showError, showSuccess } = useGlobalMessage();
@@ -110,7 +112,17 @@ const showEditModal = ref(false);
 // 删除成功状态
 const showDeleteSuccess = ref(false);
 const redirectCountdown = ref(3);
-let countdownTimer = null;
+const { pause: stopRedirectCountdown, resume: startRedirectCountdown } = useIntervalFn(
+  () => {
+    redirectCountdown.value--;
+    if (redirectCountdown.value <= 0) {
+      stopRedirectCountdown();
+      window.location.href = "/";
+    }
+  },
+  1000,
+  { immediate: false }
+);
 
 // 使用认证Store
 const authStore = useAuthStore();
@@ -123,16 +135,13 @@ const isAdmin = computed(() => authStore.isAdmin);
  * 当预签名URL过期时，可以调用此方法刷新获取新的URL
  */
 const refreshFileInfo = async () => {
-  console.log("重新加载文件信息");
-
   // 如果文件已通过密码验证，记录当前密码以便在刷新后使用
   if (fileInfo.value && fileInfo.value.passwordVerified && fileInfo.value.currentPassword) {
     try {
       // 确保当前密码被保存到会话存储
-      sessionStorage.setItem(`file_password_${fileInfo.value.slug}`, fileInfo.value.currentPassword);
-      console.log("已保存当前密码到会话存储以便刷新");
+      setFilePassword(fileInfo.value.slug, fileInfo.value.currentPassword);
     } catch (err) {
-      console.error("无法保存密码到会话存储:", err);
+      log.error("无法保存密码到会话存储:", err);
     }
   }
 
@@ -165,7 +174,7 @@ const loadFileInfo = async (force = false) => {
 
     requiresPassword.value = !!data.requires_password;
   } catch (err) {
-    console.error("加载文件信息失败:", err);
+    log.error("加载文件信息失败:", err);
     error.value = err.message || t("fileView.errors.loadFailed");
   } finally {
     loading.value = false;
@@ -189,9 +198,9 @@ const handlePasswordVerified = (data) => {
 
   if (data.currentPassword) {
     try {
-      sessionStorage.setItem(`file_password_${fileInfo.value.slug}`, data.currentPassword);
+      setFilePassword(fileInfo.value.slug, data.currentPassword);
     } catch (err) {
-      console.error("无法保存密码到会话存储:", err);
+      log.error("无法保存密码到会话存储:", err);
     }
   }
 
@@ -220,16 +229,17 @@ const openEditModal = async () => {
         passwordVerified: prev.passwordVerified,
         currentPassword: prev.currentPassword,
         // 移除 use_proxy 的旧值保留，使用从后端获取的最新值
-        rawUrl: prev.rawUrl,
+        previewUrl: prev.previewUrl,
+        downloadUrl: prev.downloadUrl,
         linkType: prev.linkType,
-        documentPreview: prev.documentPreview,
+        previewSelection: prev.previewSelection,
       };
     }
 
     // 显示编辑模态框
     showEditModal.value = true;
   } catch (err) {
-    console.error("获取文件详情出错:", err);
+    log.error("获取文件详情出错:", err);
     showError(`${t("fileView.errors.getDetailsFailed")}: ${t("fileView.errors.getDetailsFailedMessage")}`);
     showEditModal.value = true;
   }
@@ -273,13 +283,13 @@ const saveFileChanges = async (updatedFile) => {
           hash: route.hash,
         });
       } catch (replaceError) {
-        console.warn("跳转新链接失败", replaceError);
+        log.warn("跳转新链接失败", replaceError);
       }
     }
     closeEditModal();
     showSuccess(t("fileView.actions.updateSuccess"));
   } catch (err) {
-    console.error("更新文件错误:", err);
+    log.error("更新文件错误:", err);
     const msg = err?.message || t("fileView.errors.unknown");
     showError(`${t("fileView.errors.updateFailed")}: ${msg}`);
   }
@@ -295,23 +305,8 @@ const handleFileDeleted = () => {
   // 开始倒计时
   redirectCountdown.value = 3;
 
-  // 清除可能存在的旧定时器
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-  }
-
-  // 设置倒计时定时器
-  countdownTimer = setInterval(() => {
-    redirectCountdown.value--;
-
-    if (redirectCountdown.value <= 0) {
-      clearInterval(countdownTimer);
-      countdownTimer = null;
-
-      // 直接使用window.location进行重定向
-      window.location.href = "/";
-    }
-  }, 1000);
+  stopRedirectCountdown();
+  startRedirectCountdown();
 };
 
 // 组件挂载时加载文件信息
@@ -321,10 +316,7 @@ onMounted(() => {
 
 // 组件卸载时清除计时器
 onUnmounted(() => {
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
-  }
+  stopRedirectCountdown();
 });
 
 watch(

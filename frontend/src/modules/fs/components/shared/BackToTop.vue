@@ -11,17 +11,17 @@
           : 'bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 border border-gray-200'"
         :title="t('common.backToTop')"
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-        </svg>
+        <IconArrowUp size="sm" class="w-4 h-4" aria-hidden="true" />
       </button>
     </Transition>
   </Teleport>
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed } from 'vue'
+import { useScroll } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
+import { IconArrowUp } from '@/components/icons'
 
 const props = defineProps({
   darkMode: {
@@ -35,43 +35,13 @@ const props = defineProps({
 })
 
 const { t } = useI18n()
-const isVisible = ref(false)
-
-// 滚动事件处理
-function handleScroll() {
-  isVisible.value = window.scrollY > props.threshold
-}
+const { y } = useScroll(window, { behavior: 'smooth' })
+const isVisible = computed(() => y.value > props.threshold)
 
 // 平滑滚动到顶部
 function scrollToTop() {
-  window.scrollTo({
-    top: 0,
-    behavior: 'smooth'
-  })
+  y.value = 0
 }
-
-// 节流函数
-function throttle(fn, delay) {
-  let lastCall = 0
-  return function (...args) {
-    const now = Date.now()
-    if (now - lastCall >= delay) {
-      lastCall = now
-      fn.apply(this, args)
-    }
-  }
-}
-
-const throttledScroll = throttle(handleScroll, 100)
-
-onMounted(() => {
-  window.addEventListener('scroll', throttledScroll, { passive: true })
-  handleScroll() // 初始检查
-})
-
-onUnmounted(() => {
-  window.removeEventListener('scroll', throttledScroll)
-})
 </script>
 
 <style scoped>

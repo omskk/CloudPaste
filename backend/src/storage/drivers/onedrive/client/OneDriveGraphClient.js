@@ -45,11 +45,28 @@ export class OneDriveGraphClient {
   // ========== 目录操作 ==========
 
   /**
-   * 列出目录内容
-   * @param {string} path 相对路径
-   * @returns {Promise<Array>} driveItem 数组
+   * 列出目录内容（单页）
+   * - 用于分页场景：跟随 @odata.nextLink
+   *
+   * @param {string} path 相对路径（仅在 cursor 为空时使用）
+   * @param {{ cursor?: string|null, limit?: number|null }} options
+   * @returns {Promise<{ items: Array<any>, nextCursor: string|null }>}
    */
-  async listChildren(path) {
+  async listChildrenPage(path, options = {}) {
+    const cursorRaw = options?.cursor != null && String(options.cursor).trim() ? String(options.cursor).trim() : null;
+    const limitRaw = options?.limit != null && options.limit !== "" ? Number(options.limit) : null;
+    const top =
+      limitRaw != null && Number.isFinite(limitRaw) && limitRaw > 0 ? Math.max(1, Math.min(999, Math.floor(limitRaw))) : 999;
+
+    // 1) nextLink 分页
+    if (cursorRaw) {
+      const response = await this._graphRequest(cursorRaw);
+      const items = Array.isArray(response?.value) ? response.value : [];
+      const nextCursor = response?.["@odata.nextLink"] ? String(response["@odata.nextLink"]) : null;
+      return { items, nextCursor };
+    }
+
+    // 2) 首页：用 driveItem children 接口
     const normalized = this._normalizePath(path);
     const apiPath = normalized
       ? `${this.drivePath}/root:/${this._encodePath(normalized)}:/children`
@@ -57,12 +74,34 @@ export class OneDriveGraphClient {
 
     const response = await this._graphRequest(apiPath, {
       params: {
-        $top: 1000,
+        $top: String(top),
         $orderby: "name",
       },
     });
 
-    return response.value || [];
+    const items = Array.isArray(response?.value) ? response.value : [];
+    const nextCursor = response?.["@odata.nextLink"] ? String(response["@odata.nextLink"]) : null;
+    return { items, nextCursor };
+  }
+
+  /**
+   * 列出目录内容（全量）
+   * @param {string} path 相对路径
+   * @returns {Promise<Array>} driveItem 数组
+   */
+  async listChildren(path) {
+    /** @type {any[]} */
+    const all = [];
+    let cursor = null;
+    while (true) {
+      const page = await this.listChildrenPage(path, { cursor, limit: 999 });
+      all.push(...(Array.isArray(page?.items) ? page.items : []));
+      const nextCursor = page?.nextCursor ? String(page.nextCursor) : null;
+      if (!nextCursor) break;
+      if (nextCursor === cursor) break;
+      cursor = nextCursor;
+    }
+    return all;
   }
 
   /**
@@ -88,18 +127,34 @@ export class OneDriveGraphClient {
    * @returns {Promise<ReadableStream>} 文件内容流
    */
   async downloadContent(path, options = {}) {
-    const { signal } = options;
+    const response = await this.downloadContentResponse(path, options);
+    return response.body;
+  }
+
+  /**
+   * 下载文件内容（返回 Response，便于上层处理 Range / 响应头）
+   * @param {string} path 相对路径
+   * @param {{ signal?: AbortSignal, rangeHeader?: string }} options
+   * @returns {Promise<Response>}
+   */
+  async downloadContentResponse(path, options = {}) {
+    const { signal, rangeHeader } = options;
     const normalized = this._normalizePath(path);
     const apiPath = `${this.drivePath}/root:/${this._encodePath(normalized)}:/content`;
 
     const accessToken = await this.authManager.getAccessToken();
     const url = `${this.baseUrl}${apiPath}`;
 
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+    };
+    if (rangeHeader) {
+      headers.Range = rangeHeader;
+    }
+
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers,
       signal,
       redirect: "follow",
     });
@@ -108,7 +163,7 @@ export class OneDriveGraphClient {
       await this._handleErrorResponse(response, path);
     }
 
-    return response.body;
+    return response;
   }
 
   // ========== 文件上传 ==========
@@ -380,29 +435,6 @@ export class OneDriveGraphClient {
     });
   }
 
-  // ========== 搜索 ==========
-
-  /**
-   * 搜索文件
-   * @param {string} query 搜索关键词
-   * @param {Object} options 选项
-   * @returns {Promise<Array>} driveItem 数组
-   */
-  async search(query, options = {}) {
-    const { maxResults = 50 } = options;
-
-    // 使用 Graph API 搜索
-    const apiPath = `${this.drivePath}/root/search(q='${encodeURIComponent(query)}')`;
-
-    const response = await this._graphRequest(apiPath, {
-      params: {
-        $top: maxResults,
-      },
-    });
-
-    return response.value || [];
-  }
-
   // ========== 私有辅助方法 ==========
 
   /**
@@ -414,7 +446,13 @@ export class OneDriveGraphClient {
 
     const accessToken = await this.authManager.getAccessToken();
 
-    let url = `${this.baseUrl}${apiPath}`;
+    // 支持两种输入：
+    // 1) 相对路径：/me/drive/...（按 baseUrl 拼接）
+    // 2) 完整 URL：用于 @odata.nextLink 分页
+    let url =
+      typeof apiPath === "string" && (apiPath.startsWith("http://") || apiPath.startsWith("https://"))
+        ? apiPath
+        : `${this.baseUrl}${apiPath}`;
     if (params) {
       const searchParams = new URLSearchParams(params);
       url += `?${searchParams.toString()}`;

@@ -22,12 +22,14 @@ import { get, post, put, del } from "../client";
  */
 export async function getUploadPresignedUrl(options) {
   try {
+    const sha256 = typeof options?.sha256 === "string" && options.sha256 ? options.sha256 : null;
     const data = {
       filename: options.filename,
       fileSize: options.size ?? options.fileSize ?? options.filesize,
       contentType: options.mimetype,
       path: options.path || null,
       storage_config_id: options.storage_config_id || null,
+      sha256,
     };
 
     return await post("share/presign", data);
@@ -54,6 +56,7 @@ export async function completeFileUpload(data) {
     filename: data.filename,
     size: Number(data.size ?? data.fileSize ?? 0),
     etag: data.etag,
+    sha256: typeof data?.sha256 === "string" && data.sha256 ? data.sha256 : null,
     slug: data.slug,
     remark: data.remark,
     password: data.password,
@@ -142,8 +145,13 @@ export async function getFiles(limit = 50, offset = 0, options = {}) {
  * @param {string} id - 文件ID
  * @returns {Promise<Object>} 文件详情响应
  */
-export async function getFile(id) {
-  return await get(`files/${id}`);
+export async function getFile(id, options = {}) {
+  const params = {};
+  if (options.includeLinks) {
+    params.include = "links";
+  }
+  const hasParams = Object.keys(params).length > 0;
+  return await get(`files/${id}`, hasParams ? { params } : undefined);
 }
 
 /**
@@ -176,7 +184,7 @@ export async function batchDeleteFiles(ids, deleteMode = "both") {
  * @returns {Promise<Object>} 文件信息响应
  */
 export async function getPublicFile(slug) {
-  return await get(`public/files/${slug}`);
+  return await get(`share/get/${slug}`);
 }
 
 /**
@@ -186,6 +194,5 @@ export async function getPublicFile(slug) {
  * @returns {Promise<Object>} 验证响应
  */
 export async function verifyFilePassword(slug, password) {
-  return await post(`public/files/${slug}/verify`, { password });
+  return await post(`share/verify/${slug}`, { password });
 }
-

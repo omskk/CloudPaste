@@ -85,6 +85,8 @@ export default {
       selectAll: "Select All",
       deselectAll: "Deselect All",
       clickToSort: "Click to sort",
+      loadMore: "Load More",
+      pagedHint: "If this directory contains many items, only part of it is shown first. Scroll down to auto-load more, or click “Load More”.",
     },
     rename: {
       title: "Rename",
@@ -139,6 +141,9 @@ export default {
       getFileLinkError: "Error getting file direct link: {message}",
       noItemsSelected: "Please select items to operate on",
       uploadSuccess: "Upload successful",
+      uploadSuccessWithCount: "Successfully uploaded {count} files",
+      uploadSuccessWithSkipped:
+        "Upload completed: {count} files, {skipped} already existed so upload was skipped",
       uploadFailed: "Upload failed: {message}",
       shareCreated: "Share link created and copied to clipboard: {url}",
       shareCreateFailed: "Failed to create share link: {message}",
@@ -181,9 +186,12 @@ export default {
       browserNative: "Browser Native",
       pdfjsLabel: "PDF.js",
       officeProvider: {
+        native: "Native Preview",
         microsoft: "Microsoft Office Online",
         google: "Google Docs",
       },
+      nativeRenderFailed: "Native preview failed",
+      tryExternalProvider: "Please try switching to Microsoft or Google preview",
       officePreview: "Office Preview",
       useMicrosoftPreview: "Use Microsoft Preview",
       useGooglePreview: "Use Google Preview",
@@ -207,6 +215,14 @@ export default {
       saveFileShortcut: "Save file (Ctrl+S)",
       rightClickHint: "Right-click editor for more features (insert timestamp, text stats, formatting, etc.)",
       cannotGetEditorContent: "Cannot get editor content",
+      textPreview: "Text",
+      codePreview: "Code",
+      imagePreview: "Image",
+      videoPreview: "Video",
+      audioPreview: "Audio",
+      iframePreview: "Iframe",
+      archivePreview: "Archive",
+      previewTypeOther: "Preview",
     },
 
     copyModal: {
@@ -214,7 +230,7 @@ export default {
       selectedInfo: "Selected: {count} items ({folders} folders, {files} files)",
       targetLocation: "Target Location:",
       loading: "Loading...",
-      rootDirectory: "Root Directory",
+      rootDirectory: "Root",
       cancel: "Cancel",
       confirmCopy: "Confirm Copy",
       copying: "Copying...",
@@ -259,10 +275,22 @@ export default {
     audioPreview: {
       loadingAudio: "Loading...",
       audioPlayer: "Audio Player",
+      sendToGlobalPlayer: "Send to Global Player",
+      playingInGlobalPlayer: "Playing in Global Player",
+      backToPreview: "Back",
+      closePlayer: "Close Player",
+      expandPlayer: "Expand Player",
+      collapsePlayer: "Collapse Player",
+      unknownAudio: "Unknown Audio",
+      unknownArtist: "Unknown Artist",
     },
     videoPreview: {
       loadingVideo: "Loading...",
       videoPlayer: "Video Player",
+      prevVideo: "Previous",
+      nextVideo: "Next",
+      playlist: "Playlist",
+      showPlaylist: "Show Playlist",
     },
     textPreview: {
       loadingText: "Loading...",
@@ -414,7 +442,7 @@ export default {
   },
   breadcrumb: {
     navigation: "Breadcrumb Navigation",
-    root: "Root Directory",
+    root: "Root",
     exitSelection: "Exit Selection", // Only keep this one, used in FloatingActionBar
   },
 };

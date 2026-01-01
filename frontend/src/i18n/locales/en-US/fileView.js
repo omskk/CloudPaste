@@ -81,6 +81,16 @@ export default {
       error: "Preview load failed",
       notSupported: "This file type does not support preview",
       downloadToView: "Please download the file to view",
+      fullscreen: "Fullscreen",
+      exitFullscreen: "Exit fullscreen",
+
+      // Text preview mode switch (all belong to \"text preview\")
+      modes: {
+        text: "Text",
+        code: "Code",
+        markdown: "Markdown",
+        html: "HTML",
+      },
 
       // Generic preview
       generic: {
@@ -150,6 +160,31 @@ export default {
         pdfjsLabel: "PDF.js",
       },
 
+      // EPUB preview
+      epub: {
+        title: "EPUB Preview",
+        loading: "Loading...",
+        error: "EPUB load failed",
+        browserNative: "Local Preview",
+        toc: "Contents",
+        closeToc: "Close contents",
+        noToc: "No contents",
+        readingMode: "Reading mode",
+        modePaginated: "Paginated",
+        modeScrolled: "Scrolled",
+        prevPage: "Previous page",
+        nextPage: "Next page",
+        page: "Page",
+        bookmarks: "Bookmarks",
+        addBookmark: "Add bookmark",
+        removeBookmark: "Remove bookmark",
+        untitledBookmark: "Untitled bookmark",
+        historyBack: "Go back",
+        historyForward: "Go forward",
+        progressSaved: "Progress saved",
+        progressRestored: "Restored to last reading position",
+      },
+
       // Image preview
       image: {
         title: "Image Preview",
@@ -163,6 +198,9 @@ export default {
         loading: "Loading...",
         error: "Video load failed",
         notSupported: "Your browser does not support video tag",
+        hlsShareNotSupportedTitle: "m3u8 (HLS) is not supported on the share page",
+        hlsShareNotSupportedTip:
+          "This is an m3u8 playlist. A single-file share cannot include its segments (ts/m4s/key). Please open it from the Mount Browser page.",
       },
 
       // Direct preview hint

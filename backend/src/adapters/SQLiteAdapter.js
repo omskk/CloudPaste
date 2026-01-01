@@ -18,6 +18,10 @@ export class SQLiteAdapter {
       filename: this.dbPath,
       driver: sqlite3.Database,
     });
+
+    await this.db.exec("PRAGMA busy_timeout = 5000;"); // 最多等 5 秒
+    await this.db.exec("PRAGMA journal_mode = WAL;"); // 并发读更友好
+    await this.db.exec("PRAGMA synchronous = 1;"); // NORMAL
     await this.db.exec("PRAGMA foreign_keys = ON;");
     return this;
   }
@@ -34,8 +38,14 @@ export class SQLiteAdapter {
       },
 
       async run() {
-        await this._db.run(this.sql, ...this.params);
-        return { success: true };
+        const result = await this._db.run(this.sql, ...this.params);
+        const changes =
+          result && typeof result.changes === "number" ? result.changes : 0;
+        return {
+          success: true,
+          changes,
+          meta: { changes },
+        };
       },
 
       async all() {

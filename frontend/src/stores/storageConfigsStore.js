@@ -6,6 +6,9 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { api } from "@/api";
+import { createLogger } from "@/utils/logger.js";
+
+const log = createLogger("StorageConfigsStore");
 
 const CACHE_TTL = 5 * 60 * 1000; // 5 分钟缓存
 const FETCH_LIMIT = 200; // 通常足够覆盖所有配置
@@ -28,7 +31,7 @@ const STORAGE_TYPE_SCHEMA = {
     label: "OneDrive 存储",
     description: "基于 Microsoft OneDrive / Graph API 的云存储，支持预签名直传",
     capabilities: {
-      multipart: false,
+      multipart: true,
       presigned: true,
       requiresProxy: false,
       preview: "signed-url",
@@ -52,6 +55,61 @@ const STORAGE_TYPE_SCHEMA = {
     capabilities: {
       multipart: false,
       presigned: false,
+      requiresProxy: true,
+      preview: "proxy",
+    },
+  },
+  GOOGLE_DRIVE: {
+    type: "GOOGLE_DRIVE",
+    label: "Google Drive 存储",
+    description: "基于 Google Drive API 的云存储，支持 sharedWithMe 视图与单会话分片上传",
+    capabilities: {
+      multipart: true,
+      presigned: false,
+      requiresProxy: true,
+      preview: "proxy",
+    },
+  },
+  TELEGRAM: {
+    type: "TELEGRAM",
+    label: "Telegram Bot API",
+    description: "把 Telegram 频道当作内容存储后端（目录树与元数据在 CloudPaste）",
+    capabilities: {
+      multipart: true,
+      presigned: false,
+      requiresProxy: true,
+      preview: "proxy",
+    },
+  },
+  GITHUB_API: {
+    type: "GITHUB_API",
+    label: "GitHub API 存储",
+    description: "将 GitHub 仓库映射为可读写文件系统（Contents + Git Database API）",
+    capabilities: {
+      multipart: false,
+      presigned: false,
+      requiresProxy: true,
+      preview: "proxy",
+    },
+  },
+  GITHUB_RELEASES: {
+    type: "GITHUB_RELEASES",
+    label: "GitHub Releases 存储",
+    description: "只读：将 GitHub Releases 的资产与 Source code 作为文件列表挂载",
+    capabilities: {
+      multipart: false,
+      presigned: false,
+      requiresProxy: true,
+      preview: "proxy",
+    },
+  },
+  HUGGINGFACE_DATASETS: {
+    type: "HUGGINGFACE_DATASETS",
+    label: "HuggingFace Datasets",
+    description: "将 HuggingFace Datasets 映射为文件系统，支持预签名直传与分片上传",
+    capabilities: {
+      multipart: true,
+      presigned: true,
       requiresProxy: true,
       preview: "proxy",
     },
@@ -170,7 +228,7 @@ export const useStorageConfigsStore = defineStore("storageConfigs", () => {
         return configs.value;
       })
       .catch((err) => {
-        console.error("加载存储配置失败", err);
+        log.error("加载存储配置失败", err);
         error.value = err;
         throw err;
       })
@@ -216,7 +274,13 @@ export const useStorageConfigsStore = defineStore("storageConfigs", () => {
 
   const getStorageTypeMeta = (type) => {
     if (!type) return STORAGE_TYPE_SCHEMA.UNKNOWN;
-    return STORAGE_TYPE_SCHEMA[type] || STORAGE_TYPE_SCHEMA.UNKNOWN;
+    if (STORAGE_TYPE_SCHEMA[type]) return STORAGE_TYPE_SCHEMA[type];
+    // 未在 schema 中登记的类型：显示原始 type，避免界面出现“未指定类型”造成误解
+    return {
+      ...STORAGE_TYPE_SCHEMA.UNKNOWN,
+      type,
+      label: type,
+    };
   };
 
   const getStorageTypeLabel = (type) => getStorageTypeMeta(type).label;

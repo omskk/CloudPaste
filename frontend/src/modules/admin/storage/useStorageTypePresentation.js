@@ -1,5 +1,8 @@
 import { ref, computed, onMounted } from "vue";
 import { api } from "@/api";
+import { createLogger } from "@/utils/logger.js";
+
+const log = createLogger("StorageTypePresentation");
 
 /**
  * Admin 存储类型展示/样式 helper
@@ -19,7 +22,7 @@ async function ensureLoadedInternal() {
     storageTypesMeta.value = Array.isArray(resp?.data) ? resp.data : Array.isArray(resp) ? resp : [];
     loaded = true;
   } catch (e) {
-    console.error("加载存储类型元数据失败(useStorageTypePresentation):", e);
+    log.error("加载存储类型元数据失败(useStorageTypePresentation):", e);
     storageTypesMeta.value = [];
   } finally {
     loading.value = false;
@@ -39,9 +42,25 @@ const BADGE_THEME_CLASS = {
     light: "bg-sky-100 text-sky-800",
     dark: "bg-sky-700 text-sky-100",
   },
+  googledrive: {
+    light: "bg-red-100 text-red-800",
+    dark: "bg-red-700 text-red-100",
+  },
+  github: {
+    light: "bg-gray-900 text-white",
+    dark: "bg-gray-100 text-gray-900",
+  },
   local: {
     light: "bg-gray-100 text-gray-800",
     dark: "bg-gray-700 text-gray-100",
+  },
+  telegram: {
+    light: "bg-sky-100 text-sky-700",
+    dark: "bg-sky-800 text-sky-100",
+  },
+  huggingface: {
+    light: "bg-yellow-100 text-yellow-800",
+    dark: "bg-yellow-700 text-yellow-100",
   },
   default: {
     light: "bg-gray-100 text-gray-700",
@@ -63,8 +82,14 @@ function resolveBadgeTheme(type) {
       return "webdav";
     case "ONEDRIVE":
       return "onedrive";
+    case "GOOGLE_DRIVE":
+      return "googledrive";
     case "LOCAL":
       return "local";
+    case "TELEGRAM":
+      return "telegram";
+    case "HUGGINGFACE_DATASETS":
+      return "huggingface";
     default:
       return "default";
   }

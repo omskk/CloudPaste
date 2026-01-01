@@ -1,5 +1,7 @@
 export default {
   common: {
+    error: "Error",
+    retry: "Retry",
     unknown: "Unknown",
     loading: "Loading...",
     confirm: "Confirm",
@@ -16,6 +18,18 @@ export default {
     actions: "Actions",
     selectOption: "Please select",
     pleaseSelect: "Please select",
+    // Time units
+    second: "s",
+    minute: "m",
+    hour: "h",
+    day: "d",
+    now: "now",
+    ago: "ago",
+    // Time units (plural)
+    seconds: "s",
+    minutes: "m",
+    hours: "h",
+    days: "d",
     pagination: {
       previousPage: "Previous",
       nextPage: "Next",
@@ -42,6 +56,9 @@ export default {
       processing: "Processing...",
       requiredField: "This field is required",
       invalidInput: "Invalid input",
+      invalidNameEmpty: "Name cannot be empty",
+      invalidNameDots: "Name cannot be . or ..",
+      invalidNameChars: 'Name cannot contain / \\\\ ? < > * : | "',
       // Common delete confirmation dialogs
       deleteTitle: "Confirm Delete",
       deleteItem: "Are you sure you want to delete {name}? This action cannot be undone.",
@@ -63,6 +80,7 @@ export default {
         recommended: "Recommended",
         matchScore: "Match {score}%",
         partsInfo: "{count}/{total} parts",
+        partErrors: "{count} failed",
         partialComplete: "Partially complete",
         atLeastParts: "At least {count} parts",
         progressInfo: "{percentage}% ({uploaded}/{total}MB)",
@@ -105,7 +123,7 @@ export default {
     },
   },
   nav: {
-    home: "Home",
+    home: "Text Editor",
     upload: "File Upload",
     mountExplorer: "Mount Explorer",
     admin: "Admin Panel",
@@ -129,5 +147,20 @@ export default {
     toggle: "Toggle language",
     zh: "中文",
     en: "English",
+  },
+  livePhoto: {
+    badge: "LIVE",
+    loading: "Loading...",
+    playHint: "Hover or long press to play",
+    errors: {
+      videoLoadFailed: "Failed to load video",
+      photoLoadFailed: "Failed to load photo",
+      playbackFailed: "Playback failed",
+      notAllowed: "Browser does not allow video autoplay",
+      notSupported: "Video format not supported",
+      networkError: "Network error, unable to load video",
+      aborted: "Video loading was aborted",
+      decodeFailed: "Video decode error",
+    },
   },
 };

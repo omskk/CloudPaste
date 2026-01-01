@@ -54,12 +54,16 @@ export const registerFilesProtectedRoutes = (router) => {
     const { type: userType, userId } = getFilesPrincipal(c);
     const { id } = c.req.param();
     const encryptionSecret = getEncryptionSecret(c);
+    const include = c.req.query("include");
+    const linksFlag = c.req.query("links");
+    const includeLinks = include === "links" || linksFlag === "true";
+    const detailOptions = includeLinks ? { includeLinks: true } : {};
 
     let result;
     if (userType === UserType.ADMIN) {
-      result = await getAdminFileDetail(db, id, encryptionSecret, c.req.raw);
+      result = await getAdminFileDetail(db, id, encryptionSecret, c.req.raw, detailOptions);
     } else {
-      result = await getUserFileDetail(db, id, userId, encryptionSecret, c.req.raw);
+      result = await getUserFileDetail(db, id, userId, encryptionSecret, c.req.raw, detailOptions);
     }
 
     return jsonOk(c, result, "获取文件成功");
@@ -113,7 +117,7 @@ export const registerFilesProtectedRoutes = (router) => {
           const { MountManager } = await import("../../storage/managers/MountManager.js");
           const { FileSystem } = await import("../../storage/fs/FileSystem.js");
 
-          const mountManager = new MountManager(db, encryptionSecret, repositoryFactory);
+          const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
           const fileSystem = new FileSystem(mountManager);
 
           await fileSystem

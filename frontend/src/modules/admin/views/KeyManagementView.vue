@@ -10,6 +10,8 @@ import { useGlobalMessage } from "@/composables/core/useGlobalMessage.js";
 import { useConfirmDialog } from "@/composables/core/useConfirmDialog.js";
 import { useThemeMode } from "@/composables/core/useThemeMode.js";
 import { useAdminBase } from "@/composables/admin-management/useAdminBase.js";
+import { IconClock, IconDelete, IconKey, IconRefresh } from "@/components/icons";
+import { createLogger } from "@/utils/logger.js";
 
 // 导入子组件
 import KeyForm from "@/modules/admin/components/KeyForm.vue";
@@ -17,6 +19,7 @@ import KeyTable from "@/modules/admin/components/KeyTable.vue";
 
 // 使用i18n
 const { t } = useI18n();
+const log = createLogger("KeyManagementView");
 const { getAllApiKeys, deleteApiKey } = useAdminApiKeyService();
 const { getMountsList } = useAdminMountService();
 const { showSuccess, showError } = useGlobalMessage();
@@ -81,7 +84,7 @@ const loadApiKeys = async () => {
     // 更新最后刷新时间
     updateLastRefreshTime();
   } catch (e) {
-    console.error("加载API密钥失败:", e);
+    log.error("加载API密钥失败:", e);
     showError(e.message || t("admin.keyManagement.error.loadFailed"));
   } finally {
     isLoading.value = false;
@@ -95,7 +98,7 @@ const loadMounts = async () => {
     // 只保留激活状态的挂载点
     availableMounts.value = (Array.isArray(mounts) ? mounts : []).filter((mount) => mount.is_active);
   } catch (error) {
-    console.error("加载挂载点列表失败:", error);
+    log.error("加载挂载点列表失败:", error);
     availableMounts.value = [];
   }
 };
@@ -203,7 +206,7 @@ const deleteSelectedKeys = async () => {
     // 显示成功消息
     showSuccess(t("admin.keyManagement.success.bulkDeleted", { count: selectedCount }));
   } catch (e) {
-    console.error("批量删除密钥失败:", e);
+    log.error("批量删除密钥失败:", e);
     showError(t("admin.keyManagement.error.bulkDeleteFailed"));
   } finally {
     isLoading.value = false;
@@ -239,14 +242,7 @@ onMounted(() => {
             class="inline-flex items-center px-2 py-1 sm:px-3 sm:py-1.5 md:px-4 md:py-2 border border-transparent text-sm font-medium rounded-md shadow-sm transition-all duration-200 ease-in-out"
             :class="darkMode ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white'"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
+            <IconRefresh size="sm" class="mr-1.5" />
             <span class="hidden xs:inline">{{ $t("admin.keyManagement.refresh") }}</span>
           </button>
 
@@ -263,14 +259,7 @@ onMounted(() => {
                 : 'bg-red-500 hover:bg-red-600 text-white',
             ]"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-              />
-            </svg>
+            <IconDelete size="sm" class="mr-1.5" />
             <span class="hidden xs:inline">{{ $t("admin.keyManagement.bulkDelete") }}{{ selectedKeys.length ? `(${selectedKeys.length})` : "" }}</span>
             <span class="xs:hidden">{{ $t("admin.keyManagement.delete") }}{{ selectedKeys.length ? `(${selectedKeys.length})` : "" }}</span>
           </button>
@@ -281,9 +270,7 @@ onMounted(() => {
             class="inline-flex items-center px-2 py-1 sm:px-3 sm:py-1.5 md:px-4 md:py-2 border border-transparent text-sm font-medium rounded-md shadow-sm transition-all duration-200 ease-in-out"
             :class="darkMode ? 'bg-primary-600 hover:bg-primary-700 text-white' : 'bg-primary-500 hover:bg-primary-600 text-white'"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-            </svg>
+            <IconKey size="sm" class="mr-1.5" />
             <span class="hidden xs:inline">{{ $t("admin.keyManagement.create") }}</span>
             <span class="xs:hidden">{{ $t("admin.keyManagement.createShort") }}</span>
           </button>
@@ -293,9 +280,7 @@ onMounted(() => {
       <!-- 最后刷新时间显示 -->
       <div v-if="lastRefreshTime" class="text-xs sm:text-sm" :class="darkMode ? 'text-gray-400' : 'text-gray-500'">
         <span class="inline-flex items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 sm:h-4 sm:w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <IconClock size="sm" class="mr-1" />
           {{ $t("admin.keyManagement.lastRefreshed") }}: {{ lastRefreshTime }}
         </span>
       </div>

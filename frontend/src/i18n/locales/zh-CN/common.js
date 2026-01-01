@@ -1,5 +1,7 @@
 export default {
   common: {
+    error: "错误",
+    retry: "重试",
     unknown: "未知",
     loading: "加载中...",
     confirm: "确认",
@@ -17,6 +19,18 @@ export default {
     reset: "重置",
     selectOption: "请选择",
     pleaseSelect: "请选择",
+    // 时间单位
+    second: "秒",
+    minute: "分",
+    hour: "时",
+    day: "天",
+    now: "现在",
+    ago: "前",
+    // 时间单位（复数形式）
+    seconds: "秒",
+    minutes: "分",
+    hours: "时",
+    days: "天",
     pagination: {
       previousPage: "上一页",
       nextPage: "下一页",
@@ -43,6 +57,9 @@ export default {
       processing: "处理中...",
       requiredField: "此字段为必填项",
       invalidInput: "输入值无效",
+      invalidNameEmpty: "名称不能为空",
+      invalidNameDots: "名称不能是 . 或 ..",
+      invalidNameChars: "名称不能包含 / \\ ? < > * : | \" 这些字符",
       // 通用删除确认对话框
       deleteTitle: "确认删除",
       deleteItem: "确定要删除{name}吗？此操作不可恢复。",
@@ -64,6 +81,7 @@ export default {
         recommended: "推荐",
         matchScore: "匹配度 {score}%",
         partsInfo: "{count}/{total} 分片",
+        partErrors: "失败 {count} 片",
         partialComplete: "部分完成",
         atLeastParts: "至少 {count} 分片",
         progressInfo: "{percentage}% ({uploaded}/{total}MB)",
@@ -106,7 +124,7 @@ export default {
     },
   },
   nav: {
-    home: "首页",
+    home: "文本编辑",
     upload: "文件上传",
     mountExplorer: "挂载浏览",
     admin: "管理面板",
@@ -130,5 +148,20 @@ export default {
     toggle: "切换语言",
     zh: "中文",
     en: "English",
+  },
+  livePhoto: {
+    badge: "实况",
+    loading: "加载中...",
+    playHint: "悬停或长按播放",
+    errors: {
+      videoLoadFailed: "视频加载失败",
+      photoLoadFailed: "图片加载失败",
+      playbackFailed: "播放失败",
+      notAllowed: "浏览器未允许视频自动播放",
+      notSupported: "不支持此视频格式",
+      networkError: "网络错误，无法加载视频",
+      aborted: "视频加载被中断",
+      decodeFailed: "视频解码错误",
+    },
   },
 };

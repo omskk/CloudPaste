@@ -14,8 +14,9 @@ import { BaseDriver, CAPABILITIES } from "../../interfaces/capabilities/index.js
 import { ApiStatus, FILE_TYPES } from "../../../constants/index.js";
 import { DriverError, AppError, NotFoundError, ValidationError } from "../../../http/errors.js";
 import { isCloudflareWorkerEnvironment, isNodeJSEnvironment } from "../../../utils/environmentUtils.js";
-import { GetFileType, getFileTypeName } from "../../../utils/fileTypeDetector.js";
 import { getEffectiveMimeType } from "../../../utils/fileUtils.js";
+import { buildFileInfo } from "../../utils/FileInfoBuilder.js";
+import { createNodeStreamDescriptor } from "../../streaming/StreamDescriptorUtils.js";
 import { buildFullProxyUrl } from "../../../constants/proxy.js";
 
 export class LocalStorageDriver extends BaseDriver {
@@ -31,7 +32,6 @@ export class LocalStorageDriver extends BaseDriver {
       CAPABILITIES.READER,
       CAPABILITIES.WRITER,
       CAPABILITIES.ATOMIC,
-      CAPABILITIES.SEARCH,
       CAPABILITIES.PROXY,
     ];
 
@@ -295,23 +295,26 @@ export class LocalStorageDriver extends BaseDriver {
         });
 
         const isDirectory = stat.isDirectory();
-        const size = isDirectory ? 0 : stat.size || 0;
-        const modified = stat.mtime ? new Date(stat.mtime).toISOString() : new Date().toISOString();
-
-        const type = isDirectory ? FILE_TYPES.FOLDER : await GetFileType(name, db);
-        const typeName = isDirectory ? "folder" : await getFileTypeName(name, db);
+        const size = isDirectory ? null : stat.size || 0;
+        const modified = stat.mtime ? new Date(stat.mtime) : null;
 
         const itemMountPath = this._joinMountPath(basePath, name, isDirectory);
 
-        return {
+        const info = await buildFileInfo({
+          fsPath: itemMountPath,
           name,
-          path: itemMountPath,
           isDirectory,
-          isVirtual: false,
           size,
           modified,
-          type,
-          typeName,
+          mimetype: isDirectory ? "application/x-directory" : undefined,
+          mount,
+          storageType: mount?.storage_type,
+          db,
+        });
+
+        return {
+          ...info,
+          isVirtual: false,
         };
       })
     );
@@ -341,28 +344,24 @@ export class LocalStorageDriver extends BaseDriver {
 
     const isDirectory = stat.isDirectory();
     const name = this._basename(fsPath);
-    const type = isDirectory ? FILE_TYPES.FOLDER : await GetFileType(name, db);
-    const typeName = isDirectory ? "folder" : await getFileTypeName(name, db);
-
-    const size = isDirectory ? 0 : stat.size || 0;
-    const modified = stat.mtime ? new Date(stat.mtime).toISOString() : new Date().toISOString();
+    const size = isDirectory ? null : stat.size || 0;
+    const modified = stat.mtime ? new Date(stat.mtime) : null;
     const mimetype = isDirectory ? "application/x-directory" : undefined;
 
     // fullPath 当前未直接暴露，仅用于调试时可从 details 中取
     void fullPath;
 
-    return {
-      path: fsPath,
+    return await buildFileInfo({
+      fsPath,
       name,
       isDirectory,
       size,
       modified,
       mimetype,
-      mount_id: mount?.id,
-      storage_type: mount?.storage_type,
-      type,
-      typeName,
-    };
+      mount,
+      storageType: mount?.storage_type,
+      db,
+    });
   }
 
   /**
@@ -392,69 +391,25 @@ export class LocalStorageDriver extends BaseDriver {
     const lastModified = stat.mtime ? new Date(stat.mtime) : new Date();
     const etag = `"${lastModified.getTime()}-${size}"`;
 
-    // 保存 fullPath 供闭包使用
+    // 保存 fullPath 供流工厂使用
     const filePath = fullPath;
 
-    // 返回 StorageStreamDescriptor，不再构造 Response
-    return {
+    return createNodeStreamDescriptor({
       size,
       contentType,
       etag,
       lastModified,
-
-      /**
-       * 获取完整文件流
-       * @param {{ signal?: AbortSignal }} [streamOptions]
-       * @returns {Promise<{ stream: import('stream').Readable, close: () => Promise<void> }>}
-       */
-      async getStream(streamOptions = {}) {
-        const { signal } = streamOptions;
-        const stream = fs.createReadStream(filePath);
-
-        // 支持 AbortSignal 取消
-        if (signal) {
-          signal.addEventListener("abort", () => {
-            stream.destroy();
-          });
-        }
-
-        return {
-          stream, // NodeReadable
-          async close() {
-            stream.destroy();
-          },
-        };
+      async openStream() {
+        return fs.createReadStream(filePath);
       },
-
-      /**
-       * 获取指定范围的流（原生 Range 支持）
-       * @param {{ start: number, end?: number }} range
-       * @param {{ signal?: AbortSignal }} [streamOptions]
-       * @returns {Promise<{ stream: import('stream').Readable, close: () => Promise<void> }>}
-       */
-      async getRange(range, streamOptions = {}) {
-        const { signal } = streamOptions;
+      async openRangeStream(range) {
         const { start, end } = range;
-
-        const stream = fs.createReadStream(filePath, {
+        return fs.createReadStream(filePath, {
           start,
           end: end !== undefined ? end : undefined,
         });
-
-        if (signal) {
-          signal.addEventListener("abort", () => {
-            stream.destroy();
-          });
-        }
-
-        return {
-          stream, // NodeReadable
-          async close() {
-            stream.destroy();
-          },
-        };
       },
-    };
+    });
   }
 
   // ========== WRITER / ATOMIC 能力：uploadFile / createDirectory / updateFile / batchRemoveItems / renameItem / copyItem ==========
@@ -478,8 +433,10 @@ export class LocalStorageDriver extends BaseDriver {
 
     try {
       await this._writeBodyToFile(targetOsPath, fileOrStream);
-      const basePath = this._buildMountPath(mount, effectiveSubPath || "");
-      const storagePath = this._joinMountPath(basePath, name, false);
+      // storagePath 语义对齐：
+      // - FS（mount 视图）：返回挂载路径（/mount/.../file）
+      // - storage-first（ObjectStore / ShareUpload）：返回对象 key（相对 root_path 的子路径）
+      const storagePath = mount ? this._buildMountPath(mount, targetSubPath) : targetSubPath;
       return { success: true, storagePath, message: undefined };
     } catch (error) {
       throw this._wrapFsError(error, "上传文件失败");
@@ -731,120 +688,6 @@ export class LocalStorageDriver extends BaseDriver {
     }
   }
 
-  // ========== SEARCH 能力：search ==========
-
-  /**
-   * 在本地文件系统挂载内搜索文件（按文件名模糊匹配）
-   * @param {string} query   搜索关键字
-   * @param {Object} options 搜索选项
-   * @param {Object} options.mount       挂载对象
-   * @param {string|null} options.searchPath 搜索起始路径（挂载视图）
-   * @param {number} options.maxResults  最大结果数量
-   * @param {D1Database} options.db      数据库实例
-   * @returns {Promise<Array<Object>>}
-   */
-  async search(query, options = {}) {
-    this._ensureInitialized();
-    const { mount, searchPath = null, maxResults = 1000, db } = options;
-
-    if (!mount) {
-      throw new ValidationError("LOCAL 搜索需要提供挂载点信息");
-    }
-
-    const trimmedQuery = String(query || "").trim();
-    if (!trimmedQuery) {
-      throw new ValidationError("搜索关键字不能为空");
-    }
-
-    // 计算相对于挂载点的子路径
-    let baseSubPath = "";
-    if (searchPath) {
-      baseSubPath = this._extractSubPath(searchPath, mount) || "";
-    }
-    const normalizedBaseSubPath = this._normalizeSubPath(baseSubPath);
-
-    // 解析搜索起点目录（如果是文件则退化为其父目录）
-    const { fullPath: startPath, stat } = await this._resolveLocalPath(normalizedBaseSubPath || "/", {
-      mustBeDirectory: false,
-    });
-
-    const startDir = stat.isDirectory() ? startPath : path.dirname(startPath);
-    const startSubPath = stat.isDirectory()
-      ? normalizedBaseSubPath
-      : this._normalizeSubPath(path.posix.dirname(normalizedBaseSubPath || ""));
-
-    const lowerQuery = trimmedQuery.toLowerCase();
-    const results = [];
-
-    const walk = async (dirOsPath, currentSubPath) => {
-      if (results.length >= maxResults) return;
-
-      let entries;
-      try {
-        entries = await fs.promises.readdir(dirOsPath, { withFileTypes: true });
-      } catch (error) {
-        throw this._wrapFsError(error, "扫描本地目录失败");
-      }
-
-      for (const entry of entries) {
-        if (results.length >= maxResults) break;
-
-        if (entry.isSymbolicLink()) {
-          // 为避免 symlink 逃逸或循环，这里不跟随符号链接
-          continue;
-        }
-
-        const entryName = entry.name;
-        const nextSubPath = this._normalizeSubPath(
-          currentSubPath ? `${currentSubPath}/${entryName}` : entryName,
-        );
-        const entryOsPath = path.join(dirOsPath, entryName);
-
-        if (entry.isDirectory()) {
-          await walk(entryOsPath, nextSubPath);
-          continue;
-        }
-
-        const normalizedName = entryName.toLowerCase();
-        if (!normalizedName.includes(lowerQuery)) {
-          continue;
-        }
-
-        let statInfo;
-        try {
-          statInfo = await fs.promises.stat(entryOsPath);
-        } catch (error) {
-          // 读取失败时跳过当前条目
-          continue;
-        }
-
-        const size = statInfo.size || 0;
-        const modified = statInfo.mtime ? new Date(statInfo.mtime).toISOString() : new Date().toISOString();
-        const type = await GetFileType(entryName, db);
-        const typeName = await getFileTypeName(entryName, db);
-        const fsPath = this._buildMountPath(mount, nextSubPath || "/");
-
-        results.push({
-          name: entryName,
-          path: fsPath,
-          size,
-          modified,
-          isDirectory: false,
-          mimetype: getEffectiveMimeType(null, entryName),
-          type,
-          typeName,
-          mount_id: mount.id,
-          mount_name: mount.name,
-          storage_type: mount.storage_type,
-        });
-      }
-    };
-
-    await walk(startDir, startSubPath);
-
-    return results;
-  }
-
   // ========== PROXY 能力：generateProxyUrl / supportsProxyMode / getProxyConfig ==========
 
   /**
@@ -986,7 +829,7 @@ export class LocalStorageDriver extends BaseDriver {
   async _resolveLocalPath(subPath, { mustBeDirectory = false } = {}) {
     this._ensureInitialized();
     const safeSubPath = this._normalizeSubPath(subPath);
-    const joined = path.resolve(this.rootPath, safeSubPath || ".");
+    let joined = path.resolve(this.rootPath, safeSubPath || ".");
 
     const rel = path.relative(this.rootPath, joined);
     if (rel.startsWith("..") || path.isAbsolute(rel)) {
@@ -1001,10 +844,10 @@ export class LocalStorageDriver extends BaseDriver {
     try {
       stat = await fs.promises.lstat(joined);
     } catch (error) {
-      if (error?.code === "ENOENT") {
-        throw new NotFoundError("文件或目录不存在");
+      if (error?.code !== "ENOENT") {
+        throw this._wrapFsError(error, "访问本地文件系统失败");
       }
-      throw this._wrapFsError(error, "访问本地文件系统失败");
+      throw new NotFoundError("文件或目录不存在");
     }
 
     // 符号链接：解析真实路径并再次检查是否仍在 root_path 内

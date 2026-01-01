@@ -3,8 +3,11 @@ import { ref, computed, watch, shallowRef, h } from "vue";
 import { useI18n } from "vue-i18n";
 import { useFsService } from "@/modules/fs";
 import { useAdminMountService } from "@/modules/admin/services/mountService.js";
+import { IconClose, IconFolder, IconRefresh } from "@/components/icons";
+import { createLogger } from "@/utils/logger.js";
 
 const { t } = useI18n();
+const log = createLogger("FsMetaForm");
 const fsService = useFsService();
 const { getMountsList } = useAdminMountService();
 
@@ -152,7 +155,7 @@ const handleSubmit = async () => {
 
     emit("save", submitData);
   } catch (err) {
-    console.error("表单提交失败:", err);
+    log.error("表单提交失败:", err);
     error.value = err.message || t("admin.fsMeta.form.errors.submitFailed");
     isLoading.value = false;
   }
@@ -204,7 +207,7 @@ const DirectoryItemVue = {
                 }));
             }
           } catch (err) {
-            console.error("加载目录失败:", err);
+            log.error("加载目录失败:", err);
           }
         }
         children.value = dirItems;
@@ -258,10 +261,7 @@ const DirectoryItemVue = {
         ? h("div", { class: "folder-children" }, [
             this.loading
               ? h("div", { class: "folder-loading", style: { paddingLeft: `${(this.level + 1) * 0.75 + 0.75}rem` } }, [
-                  h("svg", { class: "animate-spin h-3 w-3 mr-1", xmlns: "http://www.w3.org/2000/svg", fill: "none", viewBox: "0 0 24 24" }, [
-                    h("circle", { class: "opacity-25", cx: "12", cy: "12", r: "10", stroke: "currentColor", "stroke-width": "4" }),
-                    h("path", { class: "opacity-75", fill: "currentColor", d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" }),
-                  ]),
+                  h(IconRefresh, { class: "animate-spin h-3 w-3 mr-1", "aria-hidden": "true" }),
                   h("span", { class: "text-xs" }, t("admin.fsMeta.common.loading")),
                 ])
               : this.children.length === 0
@@ -297,7 +297,7 @@ const loadMounts = async () => {
       isDirectory: true,
     }));
   } catch (error) {
-    console.error("加载挂载点列表失败:", error);
+    log.error("加载挂载点列表失败:", error);
     mountsList.value = [];
     rootDirectories.value = [];
   } finally {
@@ -342,13 +342,7 @@ const handleCancel = () => {
           :class="darkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700'"
         >
           <span class="sr-only">{{ $t("common.close") }}</span>
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 sm:h-5 sm:w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path
-              fill-rule="evenodd"
-              d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
-              clip-rule="evenodd"
-            />
-          </svg>
+          <IconClose class="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />
         </button>
       </div>
 
@@ -414,9 +408,7 @@ const handleCancel = () => {
                 :class="darkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'"
                 :title="$t('admin.fsMeta.form.path.selectButton')"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                </svg>
+                <IconFolder class="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />
               </button>
             </div>
             <p class="mt-1 text-xs" :class="darkMode ? 'text-gray-400' : 'text-gray-500'">
@@ -547,14 +539,7 @@ const handleCancel = () => {
             </label>
             <div class="border rounded-md overflow-hidden" :class="darkMode ? 'border-gray-600' : 'border-gray-300'">
               <div v-if="isLoadingMounts" class="h-64 flex justify-center items-center">
-                <svg class="animate-spin h-8 w-8" :class="darkMode ? 'text-blue-400' : 'text-blue-500'" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path
-                    class="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
+                <IconRefresh size="xl" class="animate-spin" :class="darkMode ? 'text-blue-400' : 'text-blue-500'" aria-hidden="true" />
               </div>
               <div v-else class="h-64 overflow-y-auto p-1">
                 <div class="file-tree">
@@ -564,17 +549,7 @@ const handleCancel = () => {
                       class="flex items-center py-2 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer"
                       :style="{ paddingLeft: '0.5rem' }"
                     >
-                      <svg
-                        class="h-4 w-4 flex-shrink-0 mr-2"
-                        :class="darkMode ? 'text-yellow-400' : 'text-yellow-600'"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
+                      <IconFolder size="sm" class="flex-shrink-0 mr-2" :class="darkMode ? 'text-yellow-400' : 'text-yellow-600'" aria-hidden="true" />
                       <span :class="darkMode ? 'text-gray-200' : 'text-gray-700'">/</span>
                     </div>
                   </div>

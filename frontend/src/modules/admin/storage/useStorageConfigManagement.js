@@ -1,20 +1,26 @@
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useLocalStorage } from "@vueuse/core";
 import { useAdminBase } from "@/composables/admin-management/useAdminBase.js";
 import { useStorageConfigsStore } from "@/stores/storageConfigsStore.js";
 import { useAdminStorageConfigService } from "@/modules/admin/services/storageConfigService.js";
+import { createLogger } from "@/utils/logger.js";
 
 /**
  * 存储配置管理 composable
  * 提供多存储配置的 CRUD、分页管理、测试等能力
  * @param {Object} options - 可选配置
- * @param {Function} options.confirmFn - 自定义确认函数，接收 {title, message, confirmType} 参数，返回 Promise<boolean>
+ * @param {Function} options.confirmFn - 确认对话框函数（必需），接收 {title, message, confirmType}，返回 Promise<boolean>
  */
 export function useStorageConfigManagement(options = {}) {
   const { confirmFn } = options;
+  if (!confirmFn) {
+    throw new Error("useStorageConfigManagement 必须传入 confirmFn（请在 View 里用 useConfirmDialog + createConfirmFn 创建）");
+  }
 
   // 国际化
   const { t } = useI18n();
+  const log = createLogger("StorageConfigManagement");
 
   // 继承基础功能，使用独立的页面标识符
   const base = useAdminBase("storage");
@@ -28,7 +34,7 @@ export function useStorageConfigManagement(options = {}) {
     try {
       await storageConfigsStore.refreshConfigs();
     } catch (error) {
-      console.warn("刷新全局存储配置缓存失败", error);
+      log.warn("刷新全局存储配置缓存失败", error);
     }
   };
 
@@ -87,17 +93,18 @@ export function useStorageConfigManagement(options = {}) {
   const pageSizeOptions = [4, 8, 12];
 
   // 重写默认页面大小，默认 4 条记录
+  const storedPageSizes = useLocalStorage("admin-page-size", {});
   const getDefaultPageSize = () => {
     try {
-      const saved = localStorage.getItem("admin-page-size");
-      if (saved) {
-        const pageSizes = JSON.parse(saved);
-        const savedSize = pageSizes["storage"] || 4;
-        // 确保保存的值在分页选项范围内，否则使用默认值4
-        return pageSizeOptions.includes(savedSize) ? savedSize : 4;
-      }
+      const pageSizes = storedPageSizes.value;
+      const savedSize =
+        pageSizes && typeof pageSizes === "object"
+          ? pageSizes["storage"] || 4
+          : 4;
+      // 确保保存的值在分页选项范围内，否则使用默认值 4
+      return pageSizeOptions.includes(savedSize) ? savedSize : 4;
     } catch (error) {
-      console.warn("解析存储配置分页设置失败:", error);
+      log.warn("解析存储配置分页设置失败:", error);
     }
     return 4;
   };
@@ -128,9 +135,8 @@ export function useStorageConfigManagement(options = {}) {
         storageConfigs.value = items;
         base.updatePagination({ total: filteredTotal.value }, "page");
         base.updateLastRefreshTime();
-        console.log(`存储配置列表加载完成，共 ${items.length} 条`);
       } catch (error) {
-        console.error("加载存储配置列表失败:", error);
+        log.error("加载存储配置列表失败:", error);
         storageConfigs.value = [];
         throw error;
       }
@@ -155,17 +161,11 @@ export function useStorageConfigManagement(options = {}) {
    * 删除存储配置
    */
   const handleDeleteConfig = async (configId) => {
-    // 使用传入的确认函数或默认的 window.confirm
-    let confirmed;
-    if (confirmFn) {
-      confirmed = await confirmFn({
-        title: t("common.dialogs.deleteTitle"),
-        message: t("common.dialogs.deleteItem", { name: t("admin.storage.item", "此存储配置") }),
-        confirmType: "danger",
-      });
-    } else {
-      confirmed = confirm(t("common.dialogs.deleteItem", { name: t("admin.storage.item", "此存储配置") }));
-    }
+    const confirmed = await confirmFn({
+      title: t("common.dialogs.deleteTitle"),
+      message: t("common.dialogs.deleteItem", { name: t("admin.storage.item", "此存储配置") }),
+      confirmType: "danger",
+    });
 
     if (!confirmed) {
       return;
@@ -178,7 +178,7 @@ export function useStorageConfigManagement(options = {}) {
         await loadStorageConfigs();
         await refreshSharedConfigs();
       } catch (err) {
-        console.error("删除存储配置失败:", err);
+        log.error("删除存储配置失败:", err);
         if (err.message && err.message.includes("有文件正在使用")) {
           base.showError(`无法删除此配置：${err.message}`);
         } else {
@@ -196,23 +196,12 @@ export function useStorageConfigManagement(options = {}) {
       // 使用 masked 模式重新加载配置，显示掩码占位符
       const maskedConfig = await getStorageConfigReveal(config.id, "masked");
       const finalConfig = maskedConfig?.data || maskedConfig || { ...config };
-      
-      // 调试日志：查看掩码字段
-      console.log("编辑配置 - 掩码数据:", {
-        id: finalConfig.id,
-        storage_type: finalConfig.storage_type,
-        access_key_id: finalConfig.access_key_id,
-        secret_access_key: finalConfig.secret_access_key,
-        password: finalConfig.password,
-        client_secret: finalConfig.client_secret,
-        refresh_token: finalConfig.refresh_token,
-      });
-      
+
       currentConfig.value = finalConfig;
       showEditForm.value = true;
       showAddForm.value = false;
     } catch (err) {
-      console.error("加载配置失败:", err);
+      log.error("加载配置失败:", err);
       // 降级：使用原始配置
       currentConfig.value = { ...config };
       showEditForm.value = true;
@@ -250,7 +239,7 @@ export function useStorageConfigManagement(options = {}) {
         await loadStorageConfigs();
         await refreshSharedConfigs();
       } catch (err) {
-        console.error("设置默认存储配置失败:", err);
+        log.error("设置默认存储配置失败:", err);
         base.showError(err.message || "无法设置为默认配置，请稍后再试");
       }
     });
@@ -288,6 +277,7 @@ export function useStorageConfigManagement(options = {}) {
       // - LOCAL：有 pathExists/readPermission/writePermission 字段（本地存储特有）
       // - WebDAV：有 info 字段但没有 cors/frontendSim
       // - S3：有 cors 或 frontendSim 字段
+      // - Telegram：tester 返回 getMe/getChat（Bot API）
       this.isOneDrive = !!(
         this.result.info &&
         (this.result.info.driveName || this.result.info.driveType || this.result.info.region) &&
@@ -296,12 +286,32 @@ export function useStorageConfigManagement(options = {}) {
       );
       this.isLocal = !!(this.result.pathExists || this.result.readPermission || this.result.writePermission);
       this.isWebDAV = !this.isOneDrive && !this.isLocal && !!(this.result.info && !this.result.cors && !this.result.frontendSim);
+      this.isTelegram = !!(
+        !this.isOneDrive &&
+        !this.isLocal &&
+        (this.result.getMe || this.result.getChat) &&
+        (typeof this.result.getMe === "object" || typeof this.result.getChat === "object")
+      );
     }
 
     /**
      * 计算测试状态
      */
     calculateStatus() {
+      // Telegram：只要 getMe + getChat 都成功，就算完整成功
+      if (this.isTelegram) {
+        const getMeOk = this.result.getMe?.success === true;
+        const getChatOk = this.result.getChat?.success === true;
+        const isFullSuccess = getMeOk && getChatOk;
+        const isPartialSuccess = (getMeOk && !getChatOk) || (!getMeOk && getChatOk);
+        const isSuccess = getMeOk || getChatOk;
+        return {
+          isFullSuccess,
+          isPartialSuccess,
+          isSuccess,
+        };
+      }
+
       // OneDrive：只检查读写权限
       if (this.isOneDrive) {
         const basicConnectSuccess = this.result.read?.success === true;
@@ -388,6 +398,44 @@ export function useStorageConfigManagement(options = {}) {
      */
     generateDetailsMessage() {
       const details = [];
+
+      // Telegram 测试详情
+      if (this.isTelegram) {
+        const me = this.result.getMe || {};
+        const chat = this.result.getChat || {};
+
+        if (me.success) {
+          const username = me.bot?.username ? `@${me.bot.username}` : "未知";
+          details.push(`✓ Bot 可用: ${username}`);
+        } else {
+          details.push("✗ Bot 不可用（getMe 失败）");
+          if (me.error) {
+            details.push(`  ${String(me.error).split("\n")[0]}`);
+          }
+        }
+
+        if (chat.success) {
+          const title = chat.chat?.title ? String(chat.chat.title) : "未知频道";
+          const id = chat.chat?.id != null ? String(chat.chat.id) : "未知ID";
+          details.push(`✓ 频道可用: ${title} (${id})`);
+        } else {
+          details.push("✗ 频道不可用（getChat 失败）");
+          if (chat.error) {
+            details.push(`  ${String(chat.error).split("\n")[0]}`);
+          }
+        }
+
+        const apiBaseUrl = this.result.connectionInfo?.apiBaseUrl;
+        if (apiBaseUrl) {
+          details.push(`✓ API 地址: ${apiBaseUrl}`);
+        }
+        const targetChatId = this.result.connectionInfo?.targetChatId;
+        if (targetChatId) {
+          details.push(`✓ target_chat_id: ${targetChatId}`);
+        }
+
+        return details.join("\n");
+      }
 
       // OneDrive 测试详情
       if (this.isOneDrive) {
@@ -484,7 +532,17 @@ export function useStorageConfigManagement(options = {}) {
 
       // 写权限状态 - 简洁显示
       if (this.result.write?.success) {
-        details.push("✓ 写权限正常");
+        if (this.result.write?.skipped) {
+          if (this.result.write?.note) {
+            details.push(`✓ 写测试已跳过（${this.result.write.note}）`);
+          } else {
+            details.push("✓ 写测试已跳过");
+          }
+        } else if (this.result.write?.note) {
+          details.push(`✓ 写权限正常（${this.result.write.note}）`);
+        } else {
+          details.push("✓ 写权限正常");
+        }
       } else {
         details.push("✗ 写权限失败");
         if (this.result.write?.error) {
@@ -573,79 +631,6 @@ export function useStorageConfigManagement(options = {}) {
     showDetailedResults.value = true;
   };
 
-  /**
-   * 获取提供商图标
-   */
-  const getProviderIcon = (storageType, providerType = null) => {
-    // S3存储类型：根据provider_type细分图标和颜色
-    if (storageType === 'S3' && providerType) {
-      const s3ProviderIcons = {
-        // Cloudflare R2 - cloud
-        'Cloudflare R2': {
-          path: 'M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z',
-          color: 'text-orange-500'
-        },
-        
-        // Backblaze B2 - archive-box
-        'Backblaze B2': {
-          path: 'M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z',
-          color: 'text-red-500'
-        },
-        
-        // AWS S3 - cube
-        'AWS S3': {
-          path: 'M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9',
-          color: 'text-orange-600'
-        },
-        
-        // 阿里云OSS - cloud-arrow-down
-        'Aliyun OSS': {
-          path: 'M12 9.75v6.75m0 0l-3-3m3 3l3-3m-8.25 6a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z',
-          color: 'text-blue-500'
-        },
-        
-        // 通用S3/Other - circle-stack
-        'Other': {
-          path: 'M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125',
-          color: 'text-gray-500'
-        }
-      };
-      
-      // 返回对应提供商的图标，未匹配则使用Other图标
-      return s3ProviderIcons[providerType] || s3ProviderIcons['Other'];
-    }
-    
-    // 其他存储类型的基础图标
-    const baseIcons = {
-      // S3对象存储 - circle-stack
-      'S3': {
-        path: 'M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125',
-        color: 'text-primary-500'
-      },
-      
-      // OneDrive云盘 - cloud-arrow-up
-      'ONEDRIVE': {
-        path: 'M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z',
-        color: 'text-blue-600'
-      },
-      
-      // WebDAV网络驱动器 - server
-      'WEBDAV': {
-        path: 'M21.75 17.25v-.228a4.5 4.5 0 00-.12-1.03l-2.268-9.64a3.375 3.375 0 00-3.285-2.602H7.923a3.375 3.375 0 00-3.285 2.602l-2.268 9.64a4.5 4.5 0 00-.12 1.03v.228m19.5 0a3 3 0 01-3 3H5.25a3 3 0 01-3-3m19.5 0a3 3 0 00-3-3H5.25a3 3 0 00-3 3m16.5 0h.008v.008h-.008v-.008zm-3 0h.008v.008h-.008v-.008z',
-        color: 'text-purple-500'
-      },
-      
-      // 本地存储 - folder
-      'LOCAL': {
-        path: 'M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z',
-        color: 'text-yellow-500'
-      }
-    };
-    
-    // 返回对应的图标对象，如果未找到则使用LOCAL图标作为默认
-    return baseIcons[storageType] || baseIcons['LOCAL'];
-  };
-
   return {
     // 继承基础功能
     ...base,
@@ -681,7 +666,6 @@ export function useStorageConfigManagement(options = {}) {
     showTestDetailsModal,
 
     // 工具方法
-    getProviderIcon,
     normalizeStorageTypeValue,
     STORAGE_TYPE_UNKNOWN,
   };

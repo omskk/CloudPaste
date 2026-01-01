@@ -4,16 +4,32 @@
  */
 
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { createAuthenticatedPreviewUrl } from "@/api/services/fileDownloadService.js";
+import { useEventListener } from "@vueuse/core";
 import { formatDateTime } from "@/utils/timeUtils.js";
-import { formatFileSize as formatFileSizeUtil, FileType, isArchiveFile } from "@/utils/fileTypes.js";
+import { formatFileSize as formatFileSizeUtil, FileType, getExtension, isArchiveFile } from "@/utils/fileTypes.js";
+import { decodeImagePreviewUrlToPngObjectUrl, revokeObjectUrl, shouldAttemptDecodeImagePreview } from "@/utils/imageDecode.js";
+import { createLogger } from "@/utils/logger.js";
+
+const EBOOK_EXTS = new Set(["epub", "mobi", "azw3", "azw", "fb2", "cbz"]);
+const EBOOK_MIMES = new Set([
+  "application/epub+zip",
+  "application/x-mobipocket-ebook",
+  "application/vnd.amazon.ebook",
+  "application/x-fictionbook+xml",
+  "application/vnd.comicbook+zip",
+  "application/x-cbz",
+]);
 
 export function usePreviewRenderers(file, emit, darkMode) {
+  const log = createLogger("Preview");
   // ===== 状态管理 =====
 
   // 基本状态
   const loadError = ref(false);
   const authenticatedPreviewUrl = ref(null);
+  const hasTriedImageDecodeFallback = ref(false);
+  const isDecodingImage = ref(false);
+  const imageDecodeAbortController = ref(null);
 
   // Office预览相关
   const officePreviewLoading = ref(false);
@@ -51,33 +67,35 @@ export function usePreviewRenderers(file, emit, darkMode) {
 
   // 基于文件类型的判断
   const isPdfFile = computed(() => file.value?.type === FileType.DOCUMENT);
+  const isEbookFile = computed(() => {
+    if (!file.value) return false;
+    const filename = file.value?.name || file.value?.filename || "";
+    const ext = getExtension(filename);
+    const mime = String(file.value?.mimetype || "").toLowerCase();
+    if (EBOOK_EXTS.has(ext)) return true;
+    return EBOOK_MIMES.has(mime);
+  });
 
   /**
-   * 预览URL - 基于 Link JSON 中的 rawUrl
-   * 在 FS 视图下由后端统一构造为最终可访问的直链或代理URL
+   * 预览URL - 基于 Link JSON 中的 previewUrl
+   * 在 FS 视图下由后端统一构造为最终可访问的 inline 入口
    */
   const previewUrl = computed(() => {
     if (!file.value) return "";
-
-    if (file.value.rawUrl) {
-      console.log("使用文件信息中的 rawUrl 作为预览入口:", file.value.rawUrl);
-      return file.value.rawUrl;
-    }
-
-    console.error("文件信息中没有 rawUrl 字段，请检查后端 /api/fs/get 实现");
-    return "";
+    return file.value.previewUrl || "";
   });
 
   /**
    * 获取认证预览URL（保留方法以兼容可能的工具场景）
-   * FS 视图下默认直接使用 rawUrl，正常预览不再依赖 Blob 模式
+   * FS 视图下默认直接使用 previewUrl，正常预览不再依赖 Blob 模式
    */
   const fetchAuthenticatedUrl = async () => {
     const url = previewUrl.value;
     if (!url) {
-      console.warn("预览URL为空，无法获取认证预览URL");
+      log.warn("预览URL为空，无法获取认证预览URL");
       return;
     }
+    revokeObjectUrl(authenticatedPreviewUrl.value);
     authenticatedPreviewUrl.value = url;
   };
 
@@ -117,10 +135,10 @@ export function usePreviewRenderers(file, emit, darkMode) {
           .then(() => {
             isFullscreenState.value = true;
             if (onEnter) onEnter();
-            console.log("进入全屏模式");
+            log.debug("进入全屏模式");
           })
           .catch((error) => {
-            console.error("进入全屏失败:", error);
+            log.error("进入全屏失败:", error);
             // 降级处理：使用CSS全屏效果
             isFullscreenState.value = true;
             if (onEnter) onEnter();
@@ -138,10 +156,10 @@ export function usePreviewRenderers(file, emit, darkMode) {
           .then(() => {
             isFullscreenState.value = false;
             if (onExit) onExit();
-            console.log("退出全屏模式");
+            log.debug("退出全屏模式");
           })
           .catch((error) => {
-            console.error("退出全屏失败:", error);
+            log.error("退出全屏失败:", error);
             isFullscreenState.value = false;
             if (onExit) onExit();
           });
@@ -161,11 +179,11 @@ export function usePreviewRenderers(file, emit, darkMode) {
       isOfficeFullscreen,
       () => {
         // 进入全屏时的回调
-        console.log("Office预览进入全屏");
+        log.debug("Office预览进入全屏");
       },
       () => {
         // 退出全屏时的回调
-        console.log("Office预览退出全屏");
+        log.debug("Office预览退出全屏");
       }
     );
   };
@@ -179,7 +197,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
     // 如果不在全屏状态，重置全屏标志
     if (!document.fullscreenElement) {
       isOfficeFullscreen.value = false;
-      console.log("全屏状态已重置");
+      log.debug("全屏状态已重置");
     }
   };
 
@@ -190,25 +208,70 @@ export function usePreviewRenderers(file, emit, darkMode) {
     // 浏览器原生全屏API会自动处理Esc键退出全屏
     // 这里可以添加其他键盘快捷键处理逻辑
     if (e.key === "Escape") {
-      console.log("检测到Esc键，全屏状态将由浏览器处理");
+      log.debug("检测到Esc键，全屏状态将由浏览器处理");
     }
   };
   
+  //自动清理
+  useEventListener(document, "fullscreenchange", handleFullscreenChange);
+  useEventListener(document, "keydown", handleKeyDown);
+
   // ===== 事件处理 =====
+
+  let lastContentLoadedKey = "";
+
+  const buildContentLoadedKey = () => {
+    const f = file.value;
+    const fp = f?.path || f?.id || f?.name || "";
+    const url = authenticatedPreviewUrl.value || previewUrl.value || "";
+    return `${fp}::${url}`;
+  };
 
   /**
    * 处理内容加载完成
    */
   const handleContentLoaded = () => {
-    console.log("内容加载完成");
+    const key = buildContentLoadedKey();
+    if (key && key === lastContentLoadedKey) return;
+    lastContentLoadedKey = key;
+    log.debug("内容加载完成");
     emit("loaded");
   };
 
   /**
    * 处理内容加载错误
    */
-  const handleContentError = (error) => {
-    console.error("内容加载错误:", error);
+  const handleContentError = async (error) => {
+    log.error("内容加载错误:", error);
+
+    const currentFile = file.value;
+    const currentUrl = authenticatedPreviewUrl.value || "";
+    const filename = currentFile?.name || "";
+    const mimetype = currentFile?.mimetype || "";
+
+    // 仅在“图片预览 + 首次加载失败 + 可解码格式”时做解码回退
+    if (
+      isImageFile.value &&
+      !hasTriedImageDecodeFallback.value &&
+      shouldAttemptDecodeImagePreview({ filename, mimetype }) &&
+      typeof currentUrl === "string" &&
+      !currentUrl.startsWith("blob:")
+    ) {
+      hasTriedImageDecodeFallback.value = true;
+      try {
+        log.debug("图片解码回退开始:", { filename, mimetype, url: currentUrl });
+        const { objectUrl } = await decodeImagePreviewUrlToPngObjectUrl({ url: currentUrl, filename, mimetype });
+        revokeObjectUrl(authenticatedPreviewUrl.value);
+        authenticatedPreviewUrl.value = objectUrl;
+        loadError.value = false;
+        log.debug("图片解码回退成功:", { filename, objectUrl });
+        return;
+      } catch (decodeError) {
+        log.error("图片解码回退失败:", decodeError);
+        // 继续走通用错误处理
+      }
+    }
+
     loadError.value = true;
     emit("error", error);
   };
@@ -238,7 +301,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
   const initializePreview = async () => {
     // 文本/代码/Markdown/HTML预览已移除
     // 图片、视频、音频、PDF、Office预览由模板中的条件渲染处理
-    console.log("预览初始化完成");
+    log.debug("预览初始化完成");
   };
 
   /**
@@ -247,7 +310,9 @@ export function usePreviewRenderers(file, emit, darkMode) {
   const initializeForFile = async (newFile) => {
     // 重置基本状态
     loadError.value = false;
+    revokeObjectUrl(authenticatedPreviewUrl.value);
     authenticatedPreviewUrl.value = null;
+    hasTriedImageDecodeFallback.value = false;
 
     // 重置Office预览状态
     officePreviewLoading.value = false;
@@ -256,7 +321,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
     isOfficeFullscreen.value = false;
     clearPreviewLoadTimeout();
 
-    console.log("文件预览渲染器已重置，准备预览新文件:", newFile?.name || "无文件");
+    log.debug("文件预览渲染器已重置，准备预览新文件:", newFile?.name || "无文件");
   };
 
   /**
@@ -265,7 +330,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
   const reinitializePreviewOnThemeChange = async () => {
     // 文本/代码/Markdown/HTML预览已移除
     // 图片、视频、音频、PDF、Office预览不需要主题重新初始化
-    console.log("主题变化预览重新初始化完成");
+    log.debug("主题变化预览重新初始化完成");
   };
 
   // ===== 监听器 =====
@@ -286,9 +351,18 @@ export function usePreviewRenderers(file, emit, darkMode) {
   watch(
     () => file.value,
     async (newFile) => {
+      // 文件变更：允许下一次 loaded 重新触发
+      lastContentLoadedKey = "";
       // 重置基本状态
       loadError.value = false;
+      revokeObjectUrl(authenticatedPreviewUrl.value);
       authenticatedPreviewUrl.value = null;
+      hasTriedImageDecodeFallback.value = false;
+      isDecodingImage.value = false;
+      if (imageDecodeAbortController.value) {
+        imageDecodeAbortController.value.abort();
+        imageDecodeAbortController.value = null;
+      }
 
       // 重置Office预览状态
       officePreviewLoading.value = false;
@@ -302,8 +376,8 @@ export function usePreviewRenderers(file, emit, darkMode) {
       // 只有当文件存在时才初始化预览
       if (newFile) {
         // 添加详细的文件类型判断日志
-        console.group(`📁 文件预览类型分析: ${newFile.name}`);
-        console.log("🔍 文件信息:", {
+        log.debug(`文件预览类型分析: ${newFile.name}`);
+        log.debug("文件信息:", {
           name: newFile.name,
           mimetype: newFile.mimetype,
           size: newFile.size,
@@ -312,7 +386,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
 
         // 获取文件类型信息
         const typeInfo = fileTypeInfo.value;
-        console.log("🎯 文件类型检测结果:", typeInfo);
+        log.debug("文件类型检测结果:", typeInfo);
 
         // 显示保留的类型判断结果
         const typeChecks = {
@@ -320,24 +394,72 @@ export function usePreviewRenderers(file, emit, darkMode) {
           isVideo: isVideoFile.value,
           isAudio: isAudioFile.value,
           isPdf: isPdfFile.value,
+          isEbook: isEbookFile.value,
           isOffice: isOfficeFile.value,
+          isText: isTextFile.value,
         };
-        console.log("📋 类型判断结果:", typeChecks);
+        log.debug("类型判断结果:", typeChecks);
 
         // 显示最终选择的预览类型
         const selectedType = Object.entries(typeChecks).find(([, value]) => value)?.[0] || "unknown";
-        console.log(`✅ 最终预览类型: ${selectedType}`);
-        console.groupEnd();
+        log.debug(`最终预览类型: ${selectedType}`);
 
-        if (
-          typeChecks.isImage ||
+        if (typeChecks.isImage) {
+          const filename = newFile?.name || "";
+          const mimetype = newFile?.mimetype || "";
+          const url = previewUrl.value || "";
+
+          if (url && shouldAttemptDecodeImagePreview({ filename, mimetype })) {
+            const expectedFileName = filename;
+            const controller = new AbortController();
+            imageDecodeAbortController.value = controller;
+            isDecodingImage.value = true;
+            hasTriedImageDecodeFallback.value = true;
+
+            try {
+              log.debug("图片预解码开始:", { filename, mimetype, url });
+              const decoded = await decodeImagePreviewUrlToPngObjectUrl({
+                url,
+                filename,
+                mimetype,
+                signal: controller.signal,
+              });
+
+              if (controller.signal.aborted) return;
+              if (file.value?.name !== expectedFileName) return;
+              
+              log.debug("图片预解码成功:", { filename, objectUrl: decoded.objectUrl });
+
+              revokeObjectUrl(authenticatedPreviewUrl.value);
+              authenticatedPreviewUrl.value = decoded.objectUrl;
+              loadError.value = false;
+            } catch (decodeError) {
+              if (controller.signal.aborted) return;
+              log.error("图片预解码失败:", decodeError);
+              loadError.value = true;
+              emit("error", decodeError);
+            } finally {
+              if (!controller.signal.aborted) {
+                isDecodingImage.value = false;
+              }
+              if (imageDecodeAbortController.value === controller) {
+                imageDecodeAbortController.value = null;
+              }
+            }
+
+            return;
+          }
+
+          authenticatedPreviewUrl.value = url;
+        } else if (
           typeChecks.isVideo ||
           typeChecks.isAudio ||
           typeChecks.isPdf ||
+          typeChecks.isEbook ||
           typeChecks.isText ||
           (file.value?.name && isArchiveFile(file.value.name))
         ) {
-          // 直接使用 rawUrl 作为预览入口
+          // 直接使用 previewUrl 作为预览入口
           authenticatedPreviewUrl.value = previewUrl.value;
         }
 
@@ -356,11 +478,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
    * 组件挂载时的初始化
    */
   onMounted(() => {
-    // 添加事件监听器
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    document.addEventListener("keydown", handleKeyDown);
-
-    console.log("文件预览组件已挂载");
+    log.debug("文件预览组件已挂载");
   });
 
   /**
@@ -368,14 +486,12 @@ export function usePreviewRenderers(file, emit, darkMode) {
    */
   onUnmounted(() => {
     // 清理URL资源
-    if (authenticatedPreviewUrl.value) {
-      URL.revokeObjectURL(authenticatedPreviewUrl.value);
-      authenticatedPreviewUrl.value = null;
+    revokeObjectUrl(authenticatedPreviewUrl.value);
+    authenticatedPreviewUrl.value = null;
+    if (imageDecodeAbortController.value) {
+      imageDecodeAbortController.value.abort();
+      imageDecodeAbortController.value = null;
     }
-
-    // 移除事件监听器
-    document.removeEventListener("fullscreenchange", handleFullscreenChange);
-    document.removeEventListener("keydown", handleKeyDown);
 
     // 清除计时器
     if (previewTimeoutId.value) {
@@ -383,7 +499,7 @@ export function usePreviewRenderers(file, emit, darkMode) {
       previewTimeoutId.value = null;
     }
 
-    console.log("文件预览组件已卸载");
+    log.debug("文件预览组件已卸载");
   });
 
   // ===== 扩展功能将在上层集成 =====

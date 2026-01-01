@@ -12,9 +12,7 @@
           class="p-1 rounded-full transition-colors"
           :class="darkMode ? 'hover:bg-gray-700 text-gray-400 hover:text-gray-200' : 'hover:bg-gray-200 text-gray-500 hover:text-gray-700'"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-          </svg>
+          <IconClose size="lg" aria-hidden="true" />
         </button>
       </div>
 
@@ -49,20 +47,6 @@
           :paste-key="t('mount.uppy.pasteKey')"
           :paste-hint-suffix="t('mount.uppy.pasteHint')"
         />
-
-        <!-- 错误显示 -->
-        <div v-if="errorMessage" class="mb-4 p-3 rounded-md" :class="darkMode ? 'bg-red-900/20 border border-red-700' : 'bg-red-50 border border-red-200'">
-          <div class="flex items-center">
-            <svg class="w-4 h-4 mr-2 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-              <path
-                fill-rule="evenodd"
-                d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                clip-rule="evenodd"
-              />
-            </svg>
-            <span class="text-sm" :class="darkMode ? 'text-red-300' : 'text-red-700'">{{ errorMessage }}</span>
-          </div>
-        </div>
       </div>
 
       <!-- 底部操作栏 -->
@@ -70,10 +54,7 @@
         <div class="flex justify-between items-center">
           <div class="flex items-center space-x-4">
             <div class="flex items-center space-x-2">
-              <svg class="w-4 h-4" :class="darkMode ? 'text-gray-400' : 'text-gray-500'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z" />
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3a2 2 0 012-2h4a2 2 0 012 2v4" />
-              </svg>
+              <IconFolder size="sm" :class="darkMode ? 'text-gray-400' : 'text-gray-500'" aria-hidden="true" />
               <span class="text-sm" :class="darkMode ? 'text-gray-400' : 'text-gray-500'"> {{ t("mount.uppy.targetPath") }} {{ currentPath }} </span>
             </div>
           </div>
@@ -87,17 +68,8 @@
               class="px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center space-x-2 disabled:opacity-50"
               :class="darkMode ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'"
             >
-              <svg v-if="isUploading" class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path
-                  class="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                ></path>
-              </svg>
-              <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
+              <IconRefresh v-if="isUploading" size="sm" class="animate-spin" aria-hidden="true" />
+              <IconUpload v-else size="sm" aria-hidden="true" />
               <span>{{ isUploading ? t("mount.uppy.uploading") : t("mount.uppy.startUpload") }}</span>
             </button>
           </div>
@@ -125,6 +97,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
+import { IconClose, IconFolder, IconRefresh, IconUpload } from "@/components/icons";
+import { createLogger } from "@/utils/logger.js";
 
 import Dashboard from "@uppy/dashboard";
 
@@ -147,15 +121,15 @@ import { useUppyCore, useUppyEvents, useUppyPaste, useUppyBackendProgress } from
 import UploadModeSelector from "@/components/uppy/UploadModeSelector.vue";
 import AdvancedPluginsPanel from "@/components/uppy/AdvancedPluginsPanel.vue";
 import UppyDashboardContainer from "@/components/uppy/UppyDashboardContainer.vue";
-
-// 导入ServerResumePlugin插件
-import ServerResumePlugin from "@/modules/storage-core/uppy/ServerResumePlugin.js";
+import ServerResumePlugin from "@/modules/storage-core/uppy/plugins/ServerResumePlugin.js";
+import Sha256PreprocessPlugin from "@/modules/storage-core/uppy/plugins/Sha256PreprocessPlugin.js";
 import { api } from "@/api";
 import { getUploadProgress } from "@/api/services/systemService.js";
 import { useStorageConfigsStore } from "@/stores/storageConfigsStore.js";
 import { STORAGE_STRATEGIES } from "@/modules/storage-core/drivers/types.js";
 import { resolveDriverByConfigId } from "@/modules/storage-core/drivers/registry.js";
 import { useShareUploadController } from "@/modules/upload";
+import { normalizeFsPath } from "@/utils/fsPathUtils.js";
 
 // 导入插件管理器
 import { createUppyPluginManager } from "@/modules/storage-core/uppy/UppyPluginManager.js";
@@ -179,18 +153,17 @@ const emit = defineEmits(["close", "upload-success", "upload-error"]);
 
 // 国际化
 const { locale, t } = useI18n();
+const log = createLogger("UppyUploadModal");
 
 // 使用Composables
 const { uppyInstance, initializeUppy, destroyUppy } = useUppyCore();
 const { fileCount } = useUppyEvents({
   uppy: uppyInstance,
   onFileAdded: (file) => {
-    console.log("[Uppy] 文件已添加:", file.name);
     ensureUploadIdForFile(file);
     errorMessage.value = "";
   },
   onFileRemoved: (file) => {
-    console.log("[Uppy] 文件已移除:", file.name);
   },
   onError: (error) => {
     // 捕获Uppy系统错误，统一展示到错误区域
@@ -203,7 +176,6 @@ useUppyPaste({
   uppy: uppyInstance,
   enabled: computed(() => props.isOpen),
   onPaste: (file) => {
-    console.log("[Uppy] 粘贴文件:", file.name);
   },
 });
 
@@ -239,7 +211,7 @@ const disposeFsAdapterHandle = () => {
     try {
       fsAdapterHandle.adapter.destroy();
     } catch (error) {
-      console.warn("[Uppy] 清理StorageAdapter失败", error);
+      log.warn("[Uppy] 清理StorageAdapter失败", error);
     }
   }
   fsAdapterHandle = null;
@@ -279,13 +251,8 @@ const enforceUploadMethodByDriver = (driver) => {
   }
 };
 
-const normalizePath = (path) => {
-  if (!path) return "/";
-  return path.startsWith("/") ? path : `/${path}`;
-};
-
 const getMountRootFromPath = (path) => {
-  const normalized = normalizePath(path);
+  const normalized = normalizeFsPath(path);
   const segments = normalized.split("/").filter(Boolean);
   if (!segments.length) return null;
   return `/${segments[0]}`;
@@ -300,7 +267,7 @@ const ensureMountsLoaded = async () => {
     const mounts = await getMountsList();
     mountsCache.value = Array.isArray(mounts) ? mounts : [];
   } catch (error) {
-    console.error("[Uppy] 加载挂载列表失败", error);
+    log.error("[Uppy] 加载挂载列表失败", error);
   } finally {
     mountsLoading.value = false;
   }
@@ -462,6 +429,9 @@ const getServerResumeConfig = () => ({
   showMatchScore: true,
   shouldUseMultipart: () => uploadMethod.value === 'multipart',
   resolveStorageConfigId: async () => await ensureStorageConfigForCurrentPath(),
+  // 让 ServerResumePlugin 能读取 StorageAdapter 的本地分片账本（client_keeps）
+  storagePrefix: fsAdapterHandle?.adapter?.config?.storagePrefix || 'uppy_multipart_',
+  cacheExpiry: fsAdapterHandle?.adapter?.config?.cacheExpiry || 24 * 60 * 60 * 1000,
 });
 
 const strategyMap = {
@@ -492,17 +462,79 @@ const configureUploadMethod = async () => {
       fsAdapterHandle = handle ? { ...handle, mode: handle.mode || driverStrategy.value } : null;
     }
   } catch (e) {
-    console.warn('[Uppy] configureUploadMethod 解析驱动失败', e);
+    log.warn('[Uppy] configureUploadMethod 解析驱动失败', e);
     disposeFsAdapterHandle();
   }
 };
 
 /**
- * 配置ServerResumePlugin插件
+ * 配置 ServerResumePlugin 插件
+ * - 避免重复安装相同 id 的插件
+ * - 根据当前上传模式动态开启/关闭并更新配置
  */
 const configureServerResumePlugin = () => {
+  const uppy = uppyInstance.value;
+  if (!uppy) return;
+
+  const existing = uppy.getPlugin('ServerResumePlugin');
+
   if (uploadMethod.value === 'multipart') {
-    uppyInstance.value.use(ServerResumePlugin, getServerResumeConfig());
+    const opts = getServerResumeConfig();
+    if (existing) {
+      try {
+        existing.setOptions(opts);
+      } catch (e) {
+        log.warn('[Uppy] 更新 ServerResumePlugin 配置失败', e);
+      }
+    } else {
+      uppy.use(ServerResumePlugin, opts);
+    }
+  } else if (existing) {
+    // 非分片模式时移除插件，避免多次初始化
+    try {
+      uppy.removePlugin(existing);
+    } catch (e) {
+      log.warn("[Uppy] 移除 ServerResumePlugin 失败（可忽略）", e);
+    }
+  }
+};
+
+/**
+ * 配置 Sha256PreprocessPlugin 插件（预签名模式使用）
+ * “计算 sha256” 发生在 preprocess 阶段，Uppy 面板就能显示进度
+ */
+const configureSha256PreprocessPlugin = () => {
+  const uppy = uppyInstance.value;
+  if (!uppy) return;
+
+  const existing = uppy.getPlugin("Sha256PreprocessPlugin");
+
+  // 只有当“该驱动的预签名模式确实需要 sha256”时才开启：
+  // HuggingFace LFS 需要 sha256(oid) 才能换到 uploadUrl
+  const requireSha256ForPresign = fsAdapterHandle?.adapter?.config?.requireSha256ForPresign === true;
+
+  if ((uploadMethod.value === "presigned" || uploadMethod.value === "multipart") && requireSha256ForPresign) {
+    const opts = {
+      enabled: true,
+      maxWebCryptoSize: 10_000_000,
+      metaKey: "cloudpasteSha256",
+    };
+
+    if (existing) {
+      try {
+        existing.setOptions(opts);
+      } catch (e) {
+        log.warn("[Uppy] 更新 Sha256PreprocessPlugin 配置失败", e);
+      }
+    } else {
+      uppy.use(Sha256PreprocessPlugin, opts);
+    }
+  } else if (existing) {
+    try {
+      uppy.removePlugin(existing);
+    } catch (e) {
+      log.warn("[Uppy] 移除 Sha256PreprocessPlugin 失败（可忽略）", e);
+    }
   }
 };
 
@@ -549,16 +581,22 @@ const setupUppy = async () => {
 
     uppyInstance.value.use(Dashboard, getDashboardConfig());
 
-    await configureUploadMethod();
-
+    // 安装“断点续传检查”插件：
     configureServerResumePlugin();
     if (uploadMethod.value === "multipart") {
       setupResumeDialogEvents();
     }
 
-    pluginManager.addPluginsToUppy();
+    await configureUploadMethod();
+    // configureUploadMethod 可能会创建 StorageAdapter（其中含有 storagePrefix/cacheExpiry），
+    // 这里再更新一次 ServerResumePlugin 的配置，确保 client_keeps 能读到本地账本。
+    configureServerResumePlugin();
+
+    configureSha256PreprocessPlugin();
+
+    await pluginManager.addPluginsToUppy();
   } catch (error) {
-    console.error("[Uppy] 初始化失败:", error);
+    log.error("[Uppy] 初始化失败:", error);
     errorMessage.value = t("mount.uppy.initializationFailed", { message: error.message });
   }
 };
@@ -567,12 +605,31 @@ const setupUppy = async () => {
  * 处理上传完成事件
  */
 const handleUploadComplete = async (result) => {
-  console.log("[Uppy] 上传完成:", result);
   isUploading.value = false;
 
   if (result.successful.length > 0) {
+    // skipUpload（秒传/去重）统计来源说明：
+    // - 对 presigned-single：commit 阶段会清理 uploadSessions，所以必须在 runFsCommitIfNeeded 里先做快照并写回 result.cloudpaste
+    // - 对 multipart（HuggingFace 的 skipUpload=true）：complete 阶段会清理 uploadSessions，因此必须依赖 file.meta.cloudpasteSkipUpload
+    let skippedUploadCount = 0;
+    try {
+      const fromMeta = result.successful.filter((file) => file?.meta?.cloudpasteSkipUpload === true).length;
+      const fromCloudpaste = Number(result?.cloudpaste?.skippedUploadCount || 0);
+      skippedUploadCount = Math.max(fromMeta, fromCloudpaste);
+    } catch {
+      skippedUploadCount = Number(result?.cloudpaste?.skippedUploadCount || 0);
+    }
+
+    const successCount = result.successful.length;
+    const message =
+      skippedUploadCount > 0
+        ? `上传完成：成功 ${successCount} 个（其中 ${skippedUploadCount} 个已跳过上传/秒传）`
+        : `上传完成：成功 ${successCount} 个`;
+
     emit("upload-success", {
       count: result.successful.length,
+      skippedUploadCount,
+      message,
       commitFailures: [],
       commitStats: {
         successCount: result.successful.length,
@@ -611,10 +668,28 @@ const runFsCommitIfNeeded = async (result) => {
     return;
   }
 
+  // 先快照本次上传的 skipUpload 信息（对象已存在/秒传/去重）：
+  // commitPresignedUpload 成功后会 delete uploadSessions，所以必须在 commit 前保存。
+  const adapter = fsAdapterHandle.adapter;
+  const skipSnapshot = {};
+  try {
+    if (adapter?.isUploadSkipped && typeof adapter.isUploadSkipped === "function") {
+      result.successful.forEach((file) => {
+        skipSnapshot[file.id] = adapter.isUploadSkipped(file.id) === true;
+      });
+    }
+  } catch (e) {
+    log.warn("[Uppy] 生成 skipUpload 快照失败，将忽略该提示", e);
+  }
+
   try {
     const summary = await fsAdapterHandle.adapter.batchCommitPresignedUploads(result.successful);
     const failures = summary?.failures || [];
     if (!failures.length) {
+      result.cloudpaste = {
+        ...(result.cloudpaste || {}),
+        skippedUploadCount: result.successful.filter((file) => skipSnapshot[file.id] === true).length,
+      };
       return;
     }
 
@@ -638,6 +713,10 @@ const runFsCommitIfNeeded = async (result) => {
     });
 
     result.successful = remaining;
+    result.cloudpaste = {
+      ...(result.cloudpaste || {}),
+      skippedUploadCount: result.successful.filter((file) => skipSnapshot[file.id] === true).length,
+    };
   } catch (error) {
     const failureError = error instanceof Error ? error : new Error(String(error));
     const failedFiles = result.successful.slice();
@@ -648,6 +727,10 @@ const runFsCommitIfNeeded = async (result) => {
       result.failed.push({ file, error: failureError });
     });
     result.successful = [];
+    result.cloudpaste = {
+      ...(result.cloudpaste || {}),
+      skippedUploadCount: 0,
+    };
   }
 };
 
@@ -695,7 +778,7 @@ const startUpload = async () => {
       const driver = resolveDriverByConfigId(storageConfigId);
       enforceUploadMethodByDriver(driver);
     } catch (e) {
-      console.warn("[Uppy] startUpload 驱动解析失败", e);
+      log.warn("[Uppy] startUpload 驱动解析失败", e);
     }
 
     driverStrategy.value = strategyMap[uploadMethod.value] || STORAGE_STRATEGIES.BACKEND_STREAM;
@@ -736,7 +819,7 @@ const startUpload = async () => {
 
     await fsUploadSession.start();
   } catch (error) {
-    console.error("[Uppy] 上传失败", error);
+    log.error("[Uppy] 上传失败", error);
     errorMessage.value = normalizeFsUploadError(error);
     emit("upload-error", error);
     disposeFsSession();

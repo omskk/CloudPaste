@@ -12,8 +12,11 @@ import {
 } from "@/modules/storage-core/schema/adminStorageSchemas.js";
 import { useAdminStorageTypeBehavior } from "@/modules/admin/storage/adminStorageTypeBehavior.js";
 import { api } from "@/api";
+import { IconEye, IconEyeOff, IconRefresh } from "@/components/icons";
+import { createLogger } from "@/utils/logger.js";
 
 const { t } = useI18n();
+const log = createLogger("ConfigForm");
 
 // 接收属性
 const props = defineProps({
@@ -101,6 +104,7 @@ const {
 // 计算表单标题与类型辅助标志
 const isWebDavType = computed(() => formData.value.storage_type === "WEBDAV");
 const isOneDriveType = computed(() => currentType.value === "ONEDRIVE");
+const isGoogleDriveType = computed(() => currentType.value === "GOOGLE_DRIVE");
 
 const formTitle = computed(() => {
   return props.isEdit ? "编辑存储配置" : "添加存储配置";
@@ -108,23 +112,28 @@ const formTitle = computed(() => {
 
 // 输入处理函数
 const trimInput = (field) => {
-  if (formData.value[field]) {
-    formData.value[field] = formData.value[field].trim();
+  const value = formData.value[field];
+  if (typeof value === "string") {
+    formData.value[field] = value.trim();
   }
 };
 
 const formatUrl = (field) => {
-  if (!formData.value[field]) {
+  const value = formData.value[field];
+  if (!value) {
     return;
   }
-  let url = formData.value[field].trim();
+  if (typeof value !== "string") {
+    return;
+  }
+  let url = value.trim();
   // 通用规则：先去掉尾部多余斜杠
   url = url.replace(/\/+$/, "");
   formData.value[field] = url;
 };
 
 const formatBucketName = () => {
-  if (formData.value.bucket_name) {
+  if (typeof formData.value.bucket_name === "string") {
     // 只去除空格
     formData.value.bucket_name = formData.value.bucket_name.trim();
   }
@@ -139,7 +148,27 @@ const getFieldMeta = (fieldName) => {
 
 const shouldRenderField = (fieldName) => {
   if (FIELDS_HANDLED_EXTERNALLY.has(fieldName)) return false;
-  return !!getFieldMeta(fieldName);
+  const meta = getFieldMeta(fieldName);
+  if (!meta) return false;
+
+  const dependsOn = meta?.ui?.dependsOn;
+  if (dependsOn && typeof dependsOn === "object") {
+    const depField = dependsOn.field;
+    if (typeof depField === "string" && depField) {
+      const currentValue = formData.value[depField];
+      if (Object.prototype.hasOwnProperty.call(dependsOn, "value")) {
+        return currentValue === dependsOn.value;
+      }
+      if (Array.isArray(dependsOn.values)) {
+        return dependsOn.values.includes(currentValue);
+      }
+      if (dependsOn.truthy === true) {
+        return !!currentValue;
+      }
+    }
+  }
+
+  return true;
 };
 
 /**
@@ -237,6 +266,41 @@ const getEnumOptions = (fieldName) => {
   return [];
 };
 
+const isEnumToggle = (fieldName) => {
+  const meta = getFieldMeta(fieldName);
+  if (meta?.type !== "enum") return false;
+  if (meta?.ui?.renderAs !== "toggle") return false;
+  const opts = getEnumOptions(fieldName);
+  return Array.isArray(opts) && opts.length === 2;
+};
+
+const getEnumToggleValues = (fieldName) => {
+  const opts = getEnumOptions(fieldName);
+  const values = (opts || []).map((o) => o?.value).filter(Boolean);
+  // 优先识别 Telegram 的常用值，避免依赖 options 顺序
+  const onValue = values.includes("self_hosted") ? "self_hosted" : values[1];
+  const offValue = values.includes("official") ? "official" : values[0];
+  return { onValue, offValue };
+};
+
+const getEnumToggleLabel = (fieldName) => {
+  const meta = getFieldMeta(fieldName);
+  if (meta?.ui?.toggleLabelKey) {
+    return t(meta.ui.toggleLabelKey);
+  }
+
+  const { onValue } = getEnumToggleValues(fieldName);
+  const opts = getEnumOptions(fieldName) || [];
+  const onOpt = opts.find((o) => o?.value === onValue) || null;
+  if (onOpt?.labelKey) return t(onOpt.labelKey);
+  return onOpt?.label || String(onValue || "");
+};
+
+const handleEnumToggleChange = (fieldName, checked) => {
+  const { onValue, offValue } = getEnumToggleValues(fieldName);
+  formData.value[fieldName] = checked ? onValue : offValue;
+};
+
 const isUrlField = (fieldName) => {
   const meta = getFieldMeta(fieldName);
   return meta?.validation?.rule === "url";
@@ -259,6 +323,41 @@ const isFieldRequiredOnCreate = (fieldName) => {
  */
 const isMaskedValue = (value) => {
   return typeof value === "string" && value.startsWith("*");
+};
+
+/**
+ * 归一化布尔字段的取值：
+ */
+const normalizeBooleanLike = (value) => {
+  if (value === 1 || value === "1") return true;
+  if (value === 0 || value === "0") return false;
+  return value;
+};
+
+const normalizeFormBooleans = (schema = currentConfigSchema.value) => {
+  // 顶层字段：后端存储为 0/1
+  formData.value.is_public = normalizeBooleanLike(formData.value.is_public);
+
+  // schema 内 boolean 字段：统一转换为 boolean
+  if (!schema?.fields) return;
+  for (const field of schema.fields) {
+    if (!field || field.type !== "boolean" || !field.name) continue;
+    formData.value[field.name] = normalizeBooleanLike(formData.value[field.name]);
+  }
+};
+
+// 基于 schema.defaultValue 填充默认值
+// 只在当前字段为空（undefined/null/空字符串）时写入，避免覆盖用户输入或编辑态数据
+const applySchemaDefaultValues = (schema = currentConfigSchema.value) => {
+  if (!schema?.fields) return;
+  for (const field of schema.fields) {
+    const key = field?.name;
+    if (!key) continue;
+    const current = formData.value[key];
+    if ((current === undefined || current === null || current === "") && field.defaultValue !== undefined) {
+      formData.value[key] = field.defaultValue;
+    }
+  }
 };
 
 // 字段级 blur 处理：复用已有工具逻辑
@@ -378,7 +477,18 @@ watch(
     const config = props.config;
     if (config) {
       const type = config.storage_type || (storageTypes.value[0]?.value || "");
-      formData.value = { ...config, storage_type: type };
+      const next = { ...config, storage_type: type };
+
+      // Google Drive：如果未显式设置 root_id，则编辑表单中统一展示为 "root"
+      if (
+        next.storage_type === "GOOGLE_DRIVE" &&
+        (!next.root_id || String(next.root_id).trim().length === 0)
+      ) {
+        next.root_id = "root";
+      }
+
+      formData.value = next;
+      normalizeFormBooleans();
 
       const sizeState = { storageSize: "", storageUnit: storageUnit.value };
       setStorageSizeFromBytes(formData.value.total_storage_bytes, sizeState);
@@ -390,6 +500,7 @@ watch(
         name: "",
         storage_type: type,
       };
+      normalizeFormBooleans();
       const defaultBytes = getDefaultStorageByProvider("Cloudflare R2");
       formData.value.total_storage_bytes = defaultBytes;
       const sizeState = { storageSize: "", storageUnit: storageUnit.value };
@@ -424,6 +535,17 @@ watch([storageSize, storageUnit], () => {
   });
 });
 
+// 当 schema 加载完成或 storage_type 切换时，确保布尔字段已归一化
+watch(
+  () => currentConfigSchema.value,
+  (schema) => {
+    if (!schema) return;
+    applySchemaDefaultValues(schema);
+    normalizeFormBooleans(schema);
+    ensureTypeDefaults();
+  },
+);
+
 // 提交表单
 const submitForm = async () => {
   loading.value = true;
@@ -449,12 +571,18 @@ const submitForm = async () => {
         delete updateData.password;
       }
 
-      // OneDrive 密钥字段：空值或掩码值不提交（保留原值）
-      if (isOneDriveType.value && (!updateData.client_secret || updateData.client_secret.trim() === "" || isMaskedValue(updateData.client_secret))) {
+      // OneDrive / GoogleDrive 密钥字段：空值或掩码值不提交（保留原值）
+      if (
+        (isOneDriveType.value || isGoogleDriveType.value) &&
+        (!updateData.client_secret || updateData.client_secret.trim() === "" || isMaskedValue(updateData.client_secret))
+      ) {
         delete updateData.client_secret;
       }
 
-      if (isOneDriveType.value && (!updateData.refresh_token || updateData.refresh_token.trim() === "" || isMaskedValue(updateData.refresh_token))) {
+      if (
+        (isOneDriveType.value || isGoogleDriveType.value) &&
+        (!updateData.refresh_token || updateData.refresh_token.trim() === "" || isMaskedValue(updateData.refresh_token))
+      ) {
         delete updateData.refresh_token;
       }
 
@@ -464,12 +592,25 @@ const submitForm = async () => {
     }
 
     success.value = props.isEdit ? "存储配置更新成功！" : "存储配置创建成功！";
+    try {
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        const configId = props.isEdit ? props.config?.id : savedConfig?.data?.id || savedConfig?.id;
+        window.dispatchEvent(
+          new CustomEvent("cloudpaste:storage-config-changed", {
+            detail: {
+              id: configId || null,
+              storage_type: formData.value.storage_type || null,
+            },
+          }),
+        );
+      }
+    } catch {}
     emit("success", savedConfig);
     setTimeout(() => {
       emit("close");
     }, 1000);
   } catch (err) {
-    console.error("存储配置操作失败:", err);
+    log.error("存储配置操作失败:", err);
     error.value = err.message || "操作失败，请重试";
   } finally {
     loading.value = false;
@@ -490,18 +631,10 @@ onMounted(async () => {
       formData.value.storage_type = storageTypes.value[0].value;
     }
     // schema 默认值填充
-    const schema = currentConfigSchema.value;
-    if (schema?.fields) {
-      for (const field of schema.fields) {
-        const key = field.name;
-        const current = formData.value[key];
-        if ((current === undefined || current === null || current === "") && field.defaultValue !== undefined) {
-          formData.value[key] = field.defaultValue;
-        }
-      }
-    }
+    applySchemaDefaultValues(currentConfigSchema.value);
+    normalizeFormBooleans();
   } catch (e) {
-    console.error("加载存储类型元数据失败:", e);
+    log.error("加载存储类型元数据失败:", e);
   }
 });
 </script>
@@ -636,7 +769,25 @@ onMounted(async () => {
                           {{ getFieldLabel(fieldName) }}
                           <span v-if="isFieldRequiredOnCreate(fieldName)" class="text-red-500">*</span>
                         </label>
+                        <div
+                          v-if="isEnumToggle(fieldName)"
+                          class="flex items-center h-10 px-3 py-2 rounded-md border"
+                          :class="darkMode ? 'border-gray-600' : 'border-gray-300'"
+                        >
+                          <input
+                            type="checkbox"
+                            :id="fieldName"
+                            :checked="formData[fieldName] === getEnumToggleValues(fieldName).onValue"
+                            @change="handleEnumToggleChange(fieldName, $event.target.checked)"
+                            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            :class="darkMode ? 'bg-gray-700 border-gray-600' : ''"
+                          />
+                          <label :for="fieldName" class="ml-2 text-sm" :class="darkMode ? 'text-gray-200' : 'text-gray-700'">
+                            {{ getEnumToggleLabel(fieldName) }}
+                          </label>
+                        </div>
                         <select
+                          v-else
                           :id="fieldName"
                           v-model="formData[fieldName]"
                           class="block w-full px-3 py-2 rounded-md text-sm transition-colors duration-200 border"
@@ -674,31 +825,9 @@ onMounted(async () => {
                             :class="darkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                             :disabled="isSecretRevealing(fieldName)"
                           >
-                            <svg
-                              v-if="!isSecretRevealing(fieldName) && !isSecretVisible(fieldName)"
-                              xmlns="http://www.w3.org/2000/svg"
-                              class="h-4 w-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                              <circle cx="12" cy="12" r="3" stroke-width="2" />
-                            </svg>
-                            <svg
-                              v-else-if="!isSecretRevealing(fieldName) && isSecretVisible(fieldName)"
-                              xmlns="http://www.w3.org/2000/svg"
-                              class="h-4 w-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.477 0-8.268-2.943-9.542-7a10.05 10.05 0 013.47-5.23M6.1 6.1C7.93 5.103 9.91 4.5 12 4.5c4.477 0 8.268 2.943 9.542 7-.337 1.075-.84 2.08-1.48 2.985M3 3l18 18" />
-                            </svg>
-                            <svg v-else class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
+                            <IconEye v-if="!isSecretRevealing(fieldName) && !isSecretVisible(fieldName)" size="sm" />
+                            <IconEyeOff v-else-if="!isSecretRevealing(fieldName) && isSecretVisible(fieldName)" size="sm" />
+                            <IconRefresh v-else size="sm" class="animate-spin" />
                           </button>
                         </div>
                         <input
@@ -774,7 +903,25 @@ onMounted(async () => {
                         {{ getFieldLabel(row.field) }}
                         <span v-if="isFieldRequiredOnCreate(row.field)" class="text-red-500">*</span>
                       </label>
+                      <div
+                        v-if="isEnumToggle(row.field)"
+                        class="flex items-center h-10 px-3 py-2 rounded-md border"
+                        :class="darkMode ? 'border-gray-600' : 'border-gray-300'"
+                      >
+                        <input
+                          type="checkbox"
+                          :id="row.field"
+                          :checked="formData[row.field] === getEnumToggleValues(row.field).onValue"
+                          @change="handleEnumToggleChange(row.field, $event.target.checked)"
+                          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          :class="darkMode ? 'bg-gray-700 border-gray-600' : ''"
+                        />
+                        <label :for="row.field" class="ml-2 text-sm" :class="darkMode ? 'text-gray-200' : 'text-gray-700'">
+                          {{ getEnumToggleLabel(row.field) }}
+                        </label>
+                      </div>
                       <select
+                        v-else
                         :id="row.field"
                         v-model="formData[row.field]"
                         class="block w-full px-3 py-2 rounded-md text-sm transition-colors duration-200 border"
@@ -812,31 +959,9 @@ onMounted(async () => {
                           :class="darkMode ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
                           :disabled="isSecretRevealing(row.field)"
                         >
-                          <svg
-                            v-if="!isSecretRevealing(row.field) && !isSecretVisible(row.field)"
-                            xmlns="http://www.w3.org/2000/svg"
-                            class="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                          >
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            <circle cx="12" cy="12" r="3" stroke-width="2" />
-                          </svg>
-                          <svg
-                            v-else-if="!isSecretRevealing(row.field) && isSecretVisible(row.field)"
-                            xmlns="http://www.w3.org/2000/svg"
-                            class="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                          >
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.477 0-8.268-2.943-9.542-7a10.05 10.05 0 013.47-5.23M6.1 6.1C7.93 5.103 9.91 4.5 12 4.5c4.477 0 8.268 2.943 9.542 7-.337 1.075-.84 2.08-1.48 2.985M3 3l18 18" />
-                          </svg>
-                          <svg v-else class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
+                          <IconEye v-if="!isSecretRevealing(row.field) && !isSecretVisible(row.field)" size="sm" />
+                          <IconEyeOff v-else-if="!isSecretRevealing(row.field) && isSecretVisible(row.field)" size="sm" />
+                          <IconRefresh v-else size="sm" class="animate-spin" />
                         </button>
                       </div>
                       <!-- OneDrive refresh_token 字段：仅输入框，由外部授权站点提供令牌 -->
@@ -948,10 +1073,7 @@ onMounted(async () => {
           class="w-full sm:w-auto flex justify-center items-center px-4 py-2 rounded-md text-sm font-medium transition-colors duration-200 bg-primary-500 hover:bg-primary-600 text-white"
           :class="{ 'opacity-50 cursor-not-allowed': !formValid || loading }"
         >
-          <svg v-if="loading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
+          <IconRefresh v-if="loading" size="sm" class="animate-spin -ml-1 mr-2 text-white" />
           {{ loading ? "保存中..." : "保存配置" }}
         </button>
       </div>

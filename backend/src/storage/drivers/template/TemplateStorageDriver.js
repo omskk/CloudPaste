@@ -24,6 +24,23 @@
  * - close(): Promise<void>                 - 显式关闭方法
  * - Node 环境下优先使用 NodeReadable（避免 WebStreams 桥接问题）
  * - getRange 为可选实现，未实现时 StorageStreaming 层会降级处理
+ *
+ * ========== 统一抽象==========
+ *
+ * 1）FileInfo 构造统一规范（backend/src/storage/utils/FileInfoBuilder.js）
+ *   - listDirectory / getFileInfo / search 等场景应通过 buildFileInfo 构造 FileInfo：
+ *     - 传入：fsPath、name、isDirectory、size、modified、mimetype、mount、storageType、db
+ *     - 禁止在驱动内部手动拼装 { path/name/isDirectory/size/modified/mimetype/type/typeName/mount_id/storage_type }，
+ *       所有类型与显示名称推断统一交给 FileInfoBuilder 处理。
+ *
+ * 2）下载流 StorageStreamDescriptor 统一规范（backend/src/storage/streaming/StreamDescriptorUtils.js）
+ *   - 本地文件（Node）：使用 createNodeStreamDescriptor({ openStream, openRangeStream?, size, contentType, etag, lastModified })
+ *   - HTTP/WebDAV：使用 createHttpStreamDescriptor({ fetchResponse, size?, contentType?, etag?, lastModified?, supportsRange? })
+ *   - Provider SDK 返回 Web ReadableStream（如 S3 / OneDrive / GoogleDrive）：
+ *     - 优先使用 createWebStreamDescriptor({ openStream, size?, contentType?, etag?, lastModified? })
+ *     - 或按需使用 createGenericStreamDescriptor({ stream, size?, contentType?, etag?, lastModified? })
+ *   - downloadFile 只负责调用后端 SDK / HTTP 接口，返回上述工厂函数构造的 StorageStreamDescriptor，
+ *     Range / 条件请求 / 软切片等细节统一由 StorageStreaming 层处理。
  */
 
 import { BaseDriver } from "../../interfaces/capabilities/BaseDriver.js";
@@ -145,17 +162,6 @@ export class TemplateStorageDriver extends BaseDriver {
   // ========== 可选方法：search / getStats ==========
 
   /**
-   * 搜索文件和目录（可选实现）
-   * @param {string} query    搜索关键词
-   * @param {Object} options  选项（mount/searchPath/maxResults/db）
-   */
-  async search(query, options = {}) {
-    this._ensureInitialized();
-    // 默认返回空数组，驱动可根据后端能力实现搜索逻辑
-    return [];
-  }
-
-  /**
    * 获取存储驱动统计信息（可选实现）
    * @returns {Promise<Object>} 统计信息
    */
@@ -233,8 +239,8 @@ export class TemplateStorageDriver extends BaseDriver {
     throw new Error("TemplateStorageDriver: 请在此根据目标后端实现 listMultipartParts（用于恢复已上传分片）");
   }
 
-  async refreshMultipartUrls(subPath, uploadId, partNumbers, options = {}) {
+  async signMultipartParts(subPath, uploadId, partNumbers, options = {}) {
     this._ensureInitialized();
-    throw new Error("TemplateStorageDriver: 请在此根据目标后端实现 refreshMultipartUrls（刷新上传端点或会话信息）");
+    throw new Error("TemplateStorageDriver: 请在此根据目标后端实现 signMultipartParts（获取/刷新上传参数或会话信息）");
   }
 }

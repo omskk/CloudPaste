@@ -2,6 +2,8 @@
  * 通用上传会话表操作工具
  * - 面向各存储驱动的前端分片/断点续传会话管理（S3 / OneDrive / 其他）
  * - 仅负责持久化与查询，不承载业务逻辑，便于在不同驱动间复用
+ * - 不直接操作云端 Provider 的真实上传会话生命周期（如 S3 UploadId / OneDrive uploadSession），
+ *   仅维护应用侧的控制面视图，底层资源清理依赖各存储自身的生命周期策略或专用任务
  */
 
 import { DbTables, UserType } from "../constants/index.js";
@@ -128,7 +130,7 @@ export async function createUploadSessionRecord(db, payload) {
     providerUploadId = null,
     providerUploadUrl = null,
     providerMeta = null,
-    status = "active",
+    status = "initiated",
     expiresAt = null,
     id: customId = null,
   } = payload;
@@ -346,8 +348,6 @@ export async function updateUploadSessionStatusByFingerprint(db, params) {
     userId,
   ];
 
-  console.log("[uploadSessions] 会话状态更新开始", { storageType, status });
-
   const stmt = db.prepare(sql);
   const result = await stmt.bind(...values).run();
 
@@ -356,6 +356,129 @@ export async function updateUploadSessionStatusByFingerprint(db, params) {
     status,
     changes: result?.meta?.changes ?? result?.changes ?? 0,
   });
+}
+
+/**
+ * 按会话 ID 更新 upload_sessions（通用工具）
+ *
+ *
+ * @param {D1Database} db
+ * @param {Object} params
+ * @returns {Promise<{changes:number}>}
+ */
+export async function updateUploadSessionById(db, params) {
+  const {
+    id,
+    storageType = null,
+    expectedStatus = null,
+    status,
+    bytesUploaded,
+    uploadedParts,
+    nextExpectedRange,
+    errorCode,
+    errorMessage,
+    providerUploadUrl,
+    providerUploadId,
+    providerMeta,
+    partSize,
+    totalParts,
+    expiresAt,
+  } = params || {};
+
+  if (!db || !id) {
+    return { changes: 0 };
+  }
+
+  const sets = [];
+  const bindings = [];
+
+  if (status !== undefined) {
+    sets.push("status = ?");
+    bindings.push(status);
+  }
+  if (typeof bytesUploaded === "number" && Number.isFinite(bytesUploaded)) {
+    sets.push("bytes_uploaded = ?");
+    bindings.push(bytesUploaded);
+  }
+  if (typeof uploadedParts === "number" && Number.isFinite(uploadedParts)) {
+    sets.push("uploaded_parts = ?");
+    bindings.push(uploadedParts);
+  }
+  if (typeof nextExpectedRange === "string" || nextExpectedRange === null) {
+    sets.push("next_expected_range = ?");
+    bindings.push(nextExpectedRange);
+  }
+  if (errorCode !== undefined) {
+    sets.push("error_code = ?");
+    bindings.push(errorCode);
+  }
+  if (errorMessage !== undefined) {
+    sets.push("error_message = ?");
+    bindings.push(errorMessage);
+  }
+  if (providerUploadUrl !== undefined) {
+    sets.push("provider_upload_url = ?");
+    bindings.push(providerUploadUrl);
+  }
+  if (providerUploadId !== undefined) {
+    sets.push("provider_upload_id = ?");
+    bindings.push(providerUploadId);
+  }
+  if (providerMeta !== undefined) {
+    const finalMeta =
+      providerMeta && typeof providerMeta === "object"
+        ? JSON.stringify(providerMeta)
+        : providerMeta;
+    sets.push("provider_meta = ?");
+    bindings.push(finalMeta);
+  }
+  if (typeof partSize === "number" && Number.isFinite(partSize)) {
+    sets.push("part_size = ?");
+    bindings.push(partSize);
+  }
+  if (typeof totalParts === "number" && Number.isFinite(totalParts)) {
+    sets.push("total_parts = ?");
+    bindings.push(totalParts);
+  }
+  if (typeof expiresAt === "string" || expiresAt === null) {
+    sets.push("expires_at = ?");
+    bindings.push(expiresAt);
+  }
+
+  if (sets.length === 0) {
+    return { changes: 0 };
+  }
+
+  // 始终更新 updated_at
+  sets.push("updated_at = ?");
+  bindings.push(new Date().toISOString());
+
+  const whereParts = ["id = ?"];
+  const whereBindings = [String(id)];
+
+  if (storageType) {
+    whereParts.push("storage_type = ?");
+    whereBindings.push(String(storageType));
+  }
+  if (expectedStatus) {
+    whereParts.push("status = ?");
+    whereBindings.push(String(expectedStatus));
+  }
+
+  const sql = `
+    UPDATE ${DbTables.UPLOAD_SESSIONS}
+    SET ${sets.join(", ")}
+    WHERE ${whereParts.join(" AND ")}
+  `;
+
+  const result = await db
+    .prepare(sql)
+    .bind(...bindings, ...whereBindings)
+    .run();
+
+  return {
+    changes: result?.meta?.changes ?? result?.changes ?? 0,
+  };
 }
 
 /**
@@ -376,12 +499,15 @@ export async function listActiveUploadSessions(db, params) {
   } = params;
 
   const userId = normalizeUploadSessionUserId(userIdOrInfo, userType);
+  const now = new Date().toISOString();
 
   // 基础条件：按存储类型、用户与状态过滤
+  // - 返回“仍可能继续”的会话：initiated/uploading
+  // - initiated 是否要在前端展示为“可恢复”
   const sqlParts = [
-    `SELECT * FROM ${DbTables.UPLOAD_SESSIONS} WHERE storage_type = ? AND user_id = ? AND status = ?`,
+    `SELECT * FROM ${DbTables.UPLOAD_SESSIONS} WHERE storage_type = ? AND user_id = ? AND status IN (?, ?)`,
   ];
-  const values = [storageType, userId, "active"];
+  const values = [storageType, userId, "initiated", "uploading"];
 
   // 可选挂载过滤
   if (mountId) {
@@ -407,6 +533,10 @@ export async function listActiveUploadSessions(db, params) {
     values.push(likePrefix);
   }
 
+  // 过滤掉已过期的会话（如果 expires_at 有值）
+  sqlParts.push("AND (expires_at IS NULL OR expires_at > ?)");
+  values.push(now);
+
   // 排序与限制
   const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
   sqlParts.push("ORDER BY created_at DESC");
@@ -417,6 +547,31 @@ export async function listActiveUploadSessions(db, params) {
 
   const result = await db.prepare(sql).bind(...values).all();
   return result?.results || [];
+}
+
+/**
+ * 按会话ID查询单个上传会话记录
+ *
+ * @param {D1Database} db
+ * @param {{ id: string }} params
+ * @returns {Promise<Object|null>}
+ */
+export async function findUploadSessionById(db, params) {
+  const { id } = params || {};
+  if (!id) {
+    return null;
+  }
+
+  const sql = `
+    SELECT *
+    FROM ${DbTables.UPLOAD_SESSIONS}
+    WHERE id = ?
+    LIMIT 1
+  `;
+
+  const result = await db.prepare(sql).bind(id).all();
+  const rows = result?.results || [];
+  return rows.length > 0 ? rows[0] : null;
 }
 
 /**

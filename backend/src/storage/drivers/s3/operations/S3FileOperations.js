@@ -14,12 +14,14 @@ import {
   CopyObjectCommand,
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getMimeTypeFromFilename } from "../../../../utils/fileUtils.js";
 import { handleFsError } from "../../../fs/utils/ErrorHandler.js";
 import { updateParentDirectoriesModifiedTime } from "../utils/S3DirectoryUtils.js";
+import { applyS3RootPrefix } from "../utils/S3PathUtils.js";
 import { CAPABILITIES } from "../../../interfaces/capabilities/index.js";
-import { GetFileType, getFileTypeName } from "../../../../utils/fileTypeDetector.js";
-import { FILE_TYPES, FILE_TYPE_NAMES } from "../../../../constants/index.js";
+import { buildFileInfo } from "../../../utils/FileInfoBuilder.js";
+import { createHttpStreamDescriptor } from "../../../streaming/StreamDescriptorUtils.js";
 
 export class S3FileOperations {
   /**
@@ -47,123 +49,67 @@ export class S3FileOperations {
    * @returns {Promise<import('../../../streaming/types.js').StorageStreamDescriptor>} 流描述对象
    */
   async getFileFromS3(s3Config, s3SubPath, fileName, forceDownload = false, encryptionSecret, request = null) {
-    const s3Client = await createS3Client(s3Config, encryptionSecret);
-    const key = s3SubPath.startsWith("/") ? s3SubPath.slice(1) : s3SubPath;
+    // 注意：S3StorageDriver.initialize 已经创建并初始化了 this.s3Client。
+    // 这里优先复用，避免每次下载都重复解密/创建 client（Worker 冷启动时更容易抖动）。
+    const s3Client = this.s3Client || (await createS3Client(s3Config, encryptionSecret));
+    const fullKey = applyS3RootPrefix(s3Config, s3SubPath);
+    const key = fullKey.startsWith("/") ? fullKey.slice(1) : fullKey;
 
-    // 先获取文件元数据
-    let metadata;
-    try {
-      const headCommand = new HeadObjectCommand({
+    // 使用统一的 HTTP 流描述构造器（Web ReadableStream）：
+    const expiresIn = 300;
+    const getUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
         Bucket: s3Config.bucket_name,
         Key: key,
-      });
-      metadata = await s3Client.send(headCommand);
-    } catch (error) {
-      if (error?.$metadata?.httpStatusCode === 404) {
-        throw new NotFoundError("文件不存在");
-      }
-      throw new S3DriverError("获取文件元数据失败", { details: { cause: error?.message } });
-    }
+      }),
+      { expiresIn },
+    );
 
-    const contentType = metadata.ContentType || getMimeTypeFromFilename(fileName);
-    const size = metadata.ContentLength ?? null;
-    const etag = metadata.ETag ?? null;
-    const lastModified = metadata.LastModified ? new Date(metadata.LastModified) : null;
+    // 可选：用于 size 缺失/异常时探测 size（StorageStreaming 的 probeSize 会用到）
+    const headUrl = await getSignedUrl(
+      s3Client,
+      new HeadObjectCommand({
+        Bucket: s3Config.bucket_name,
+        Key: key,
+      }),
+      { expiresIn },
+    );
 
-    // 返回 StorageStreamDescriptor
-    return {
+    const contentType = getMimeTypeFromFilename(fileName);
+    const size = null;
+    const etag = null;
+    const lastModified = null;
+
+    return createHttpStreamDescriptor({
       size,
       contentType,
       etag,
       lastModified,
-
-      /**
-       * 获取完整文件流
-       * @param {{ signal?: AbortSignal }} [streamOptions]
-       * @returns {Promise<{ stream: ReadableStream, close: () => Promise<void> }>}
-       */
-      async getStream(streamOptions = {}) {
-        const { signal } = streamOptions;
-        try {
-          const getCommand = new GetObjectCommand({
-            Bucket: s3Config.bucket_name,
-            Key: key,
-          });
-          const response = await s3Client.send(getCommand, signal ? { abortSignal: signal } : undefined);
-
-          // AWS SDK v3 返回的 Body 是 Web ReadableStream
-          const stream = response.Body;
-
-          return {
-            stream,
-            async close() {
-              // AWS SDK 的流会自动关闭，但我们可以尝试取消
-              if (stream && typeof stream.cancel === "function") {
-                try {
-                  await stream.cancel();
-                } catch {
-                  // 忽略取消错误
-                }
-              }
-            },
-          };
-        } catch (error) {
-          if (error instanceof AppError) {
-            throw error;
-          }
-          if (error?.$metadata?.httpStatusCode === 404) {
-            throw new NotFoundError("文件不存在");
-          }
-          throw new S3DriverError("获取文件流失败", { details: { cause: error?.message } });
-        }
+      supportsRange: true,
+      fetchResponse: async (signal) => {
+        return await fetch(getUrl, {
+          method: "GET",
+          signal,
+          redirect: "follow",
+        });
       },
-
-      /**
-       * 获取指定范围的流（S3 原生支持 Range）
-       * @param {{ start: number, end?: number }} range
-       * @param {{ signal?: AbortSignal }} [streamOptions]
-       * @returns {Promise<{ stream: ReadableStream, close: () => Promise<void> }>}
-       */
-      async getRange(range, streamOptions = {}) {
-        const { signal } = streamOptions;
-        const { start, end } = range;
-
-        // 构建 Range 头
-        const rangeHeader = end !== undefined ? `bytes=${start}-${end}` : `bytes=${start}-`;
-
-        try {
-          const getCommand = new GetObjectCommand({
-            Bucket: s3Config.bucket_name,
-            Key: key,
-            Range: rangeHeader,
-          });
-          const response = await s3Client.send(getCommand, signal ? { abortSignal: signal } : undefined);
-
-          const stream = response.Body;
-
-          return {
-            stream,
-            async close() {
-              if (stream && typeof stream.cancel === "function") {
-                try {
-                  await stream.cancel();
-                } catch {
-                  // 忽略取消错误
-                }
-              }
-            },
-          };
-        } catch (error) {
-          if (error instanceof AppError) {
-            throw error;
-          }
-          if (error?.$metadata?.httpStatusCode === 404) {
-            throw new NotFoundError("文件不存在");
-          }
-          throw new S3DriverError("获取文件范围流失败", { details: { cause: error?.message } });
-        }
+      fetchRangeResponse: async (signal, rangeHeader) => {
+        return await fetch(getUrl, {
+          method: "GET",
+          headers: { Range: rangeHeader },
+          signal,
+          redirect: "follow",
+        });
       },
-    };
+      fetchHeadResponse: async (signal) => {
+        return await fetch(headUrl, {
+          method: "HEAD",
+          signal,
+          redirect: "follow",
+        });
+      },
+    });
   }
 
   /**
@@ -177,12 +123,14 @@ export class S3FileOperations {
 
     return handleFsError(
       async () => {
+        const fullKey = applyS3RootPrefix(this.config, s3SubPath);
+
         // 使用 ListObjectsV2Command 获取文件信息
-        console.log(`getFileInfo - 使用 ListObjects 查询文件: ${s3SubPath}`);
+        console.log(`getFileInfo - 使用 ListObjects 查询文件: ${fullKey}`);
 
         const listParams = {
           Bucket: this.config.bucket_name,
-          Prefix: s3SubPath,
+          Prefix: fullKey,
           MaxKeys: 1,
         };
 
@@ -191,7 +139,7 @@ export class S3FileOperations {
           const listResponse = await this.s3Client.send(listCommand);
 
           // 检查是否找到精确匹配的文件
-          const exactMatch = listResponse.Contents?.find((item) => item.Key === s3SubPath);
+          const exactMatch = listResponse.Contents?.find((item) => item.Key === fullKey);
 
           if (!exactMatch) {
             throw new NotFoundError("文件不存在");
@@ -203,22 +151,21 @@ export class S3FileOperations {
           // 检查是否为目录：基于Key是否以'/'结尾判断
           const isDirectory = exactMatch.Key.endsWith("/");
 
-          const fileType = isDirectory ? FILE_TYPES.FOLDER : await GetFileType(fileName, db);
-          const fileTypeName = isDirectory ? FILE_TYPE_NAMES[FILE_TYPES.FOLDER] : await getFileTypeName(fileName, db);
-          const detectedMimeType = isDirectory ? "application/x-directory" : getMimeTypeFromFilename(fileName);
+          const info = await buildFileInfo({
+            fsPath: path,
+            name: fileName,
+            isDirectory,
+            size: isDirectory ? null : exactMatch.Size || 0,
+            modified: exactMatch.LastModified ? exactMatch.LastModified : null,
+            mimetype: isDirectory ? "application/x-directory" : getMimeTypeFromFilename(fileName),
+            mount,
+            storageType: mount.storage_type,
+            db,
+          });
 
           const result = {
-            path: path,
-            name: fileName,
-            isDirectory: isDirectory,
-            size: isDirectory ? 0 : exactMatch.Size || 0, // 目录大小为0
-            modified: exactMatch.LastModified ? exactMatch.LastModified.toISOString() : new Date().toISOString(),
-            mimetype: detectedMimeType,
+            ...info,
             etag: exactMatch.ETag ? exactMatch.ETag.replace(/"/g, "") : undefined,
-            mount_id: mount.id,
-            storage_type: mount.storage_type,
-            type: fileType, // 整数类型常量 (0-6)
-            typeName: fileTypeName, // 类型名称（用于调试）
           };
 
           console.log(`getFileInfo - ListObjects 成功获取文件信息: ${result.name}`);
@@ -230,7 +177,7 @@ export class S3FileOperations {
           try {
             const getParams = {
               Bucket: this.config.bucket_name,
-              Key: s3SubPath,
+              Key: fullKey,
               Range: "bytes=0-0", // 只获取第一个字节来检查文件存在性
             };
 
@@ -242,21 +189,21 @@ export class S3FileOperations {
             // 检查是否为目录：基于ContentType判断
             const isDirectory = getResponse.ContentType === "application/x-directory";
 
-            const fileType = isDirectory ? FILE_TYPES.FOLDER : await GetFileType(fileName, db);
-            const fileTypeName = isDirectory ? FILE_TYPE_NAMES[FILE_TYPES.FOLDER] : await getFileTypeName(fileName, db);
+            const info = await buildFileInfo({
+              fsPath: path,
+              name: fileName,
+              isDirectory,
+              size: isDirectory ? null : getResponse.ContentLength || 0,
+              modified: getResponse.LastModified ? getResponse.LastModified : null,
+              mimetype: getResponse.ContentType || "application/octet-stream",
+              mount,
+              storageType: mount.storage_type,
+              db,
+            });
 
             const result = {
-              path: path,
-              name: fileName,
-              isDirectory: isDirectory,
-              size: isDirectory ? 0 : getResponse.ContentLength || 0, // 目录大小为0
-              modified: getResponse.LastModified ? getResponse.LastModified.toISOString() : new Date().toISOString(),
-              mimetype: getResponse.ContentType || "application/octet-stream", // 统一使用mimetype字段名
+              ...info,
               etag: getResponse.ETag ? getResponse.ETag.replace(/"/g, "") : undefined,
-              mount_id: mount.id,
-              storage_type: mount.storage_type,
-              type: fileType, // 整数类型常量 (0-6)
-              typeName: fileTypeName, // 类型名称（用于调试）
             };
 
             console.log(`getFileInfo(GET) - 文件[${result.name}], S3 ContentType[${getResponse.ContentType}]`);
@@ -305,6 +252,14 @@ export class S3FileOperations {
 
     return handleFsError(
       async () => {
+        const fullKey = applyS3RootPrefix(this.config, s3SubPath);
+
+        const rawPath = typeof s3SubPath === "string" ? s3SubPath : "";
+        const trimmedPath = rawPath.trim();
+        if (!trimmedPath || trimmedPath.endsWith("/")) {
+          throw new ValidationError("目录不支持生成下载链接");
+        }
+
         const cacheOptions = {
           userType,
           userId,
@@ -313,7 +268,7 @@ export class S3FileOperations {
 
         const presignedUrl = await generateDownloadUrl(
           this.config,
-          s3SubPath,
+          fullKey,
           this.encryptionSecret,
           expiresIn,
           forceDownload,
@@ -349,7 +304,7 @@ export class S3FileOperations {
    * @returns {Promise<boolean>} 是否存在
    */
   async exists(s3SubPath) {
-    const key = s3SubPath.startsWith("/") ? s3SubPath.slice(1) : s3SubPath;
+    const key = applyS3RootPrefix(this.config, s3SubPath);
     const isDirectory = key === "" || key.endsWith("/");
 
     // 文件优先使用 HEAD，避免 List 前缀误判
@@ -405,6 +360,8 @@ export class S3FileOperations {
 
     return handleFsError(
       async () => {
+        const fullKey = applyS3RootPrefix(this.config, s3SubPath);
+
         const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
         // 检查内容大小
@@ -422,14 +379,14 @@ export class S3FileOperations {
         try {
           const listParams = {
             Bucket: this.config.bucket_name,
-            Prefix: s3SubPath,
+            Prefix: fullKey,
             MaxKeys: 1,
           };
           const listCommand = new ListObjectsV2Command(listParams);
           const listResponse = await this.s3Client.send(listCommand);
 
           // 检查是否找到精确匹配的文件
-          const exactMatch = listResponse.Contents?.find((item) => item.Key === s3SubPath);
+          const exactMatch = listResponse.Contents?.find((item) => item.Key === fullKey);
           if (exactMatch) {
             originalMetadata = {
               LastModified: exactMatch.LastModified,
@@ -444,17 +401,17 @@ export class S3FileOperations {
 
         const putParams = {
           Bucket: this.config.bucket_name,
-          Key: s3SubPath,
+          Key: fullKey,
           Body: content,
           ContentType: contentType,
         };
 
-        console.log(`准备更新S3对象: ${s3SubPath}, 内容类型: ${contentType}`);
+        console.log(`准备更新S3对象: ${fullKey}, 内容类型: ${contentType}`);
         const putCommand = new PutObjectCommand(putParams);
         const result = await this.s3Client.send(putCommand);
 
         // 更新父目录的修改时间
-        await updateParentDirectoriesModifiedTime(this.s3Client, this.config.bucket_name, s3SubPath);
+        await updateParentDirectoriesModifiedTime(this.s3Client, this.config.bucket_name, fullKey, this.config.root_prefix);
 
         return {
           success: true,
@@ -480,6 +437,9 @@ export class S3FileOperations {
   async renameFile(oldS3SubPath, newS3SubPath, options = {}) {
     return handleFsError(
       async () => {
+        const oldKey = applyS3RootPrefix(this.config, oldS3SubPath);
+        const newKey = applyS3RootPrefix(this.config, newS3SubPath);
+
         // 检查源文件是否存在
         const sourceExists = await this.exists(oldS3SubPath);
         if (!sourceExists) {
@@ -495,8 +455,8 @@ export class S3FileOperations {
         // 复制文件到新位置
         const copyParams = {
           Bucket: this.config.bucket_name,
-          CopySource: encodeURIComponent(this.config.bucket_name + "/" + oldS3SubPath),
-          Key: newS3SubPath,
+          CopySource: encodeURIComponent(this.config.bucket_name + "/" + oldKey),
+          Key: newKey,
         };
 
         const copyCommand = new CopyObjectCommand(copyParams);
@@ -505,7 +465,7 @@ export class S3FileOperations {
         // 删除原文件
         const deleteParams = {
           Bucket: this.config.bucket_name,
-          Key: oldS3SubPath,
+          Key: oldKey,
         };
 
         const deleteCommand = new DeleteObjectCommand(deleteParams);
@@ -534,6 +494,9 @@ export class S3FileOperations {
     const { skipExisting = true } = options;
 
     try {
+      const sourceKey = applyS3RootPrefix(this.config, sourceS3SubPath);
+      const targetKey = applyS3RootPrefix(this.config, targetS3SubPath);
+
       // 检查源文件是否存在
       const sourceExists = await this.exists(sourceS3SubPath);
       if (!sourceExists) {
@@ -558,8 +521,8 @@ export class S3FileOperations {
       // 执行复制
       const copyParams = {
         Bucket: this.config.bucket_name,
-        CopySource: encodeURIComponent(this.config.bucket_name + "/" + sourceS3SubPath),
-        Key: targetS3SubPath,
+        CopySource: encodeURIComponent(this.config.bucket_name + "/" + sourceKey),
+        Key: targetKey,
         MetadataDirective: "COPY", // 保持原有元数据
       };
 
@@ -567,7 +530,7 @@ export class S3FileOperations {
       await this.s3Client.send(copyCommand);
 
       // 更新父目录的修改时间
-      await updateParentDirectoriesModifiedTime(this.s3Client, this.config.bucket_name, targetS3SubPath);
+      await updateParentDirectoriesModifiedTime(this.s3Client, this.config.bucket_name, targetKey, this.config.root_prefix);
 
       return {
         success: true,
