@@ -5,8 +5,10 @@ import { MountManager } from "../../storage/managers/MountManager.js";
 import { FileSystem } from "../../storage/fs/FileSystem.js";
 import { getEncryptionSecret } from "../../utils/environmentUtils.js";
 import { usePolicy } from "../../security/policies/policies.js";
-import { findUploadSessionById, updateUploadSessionById } from "../../utils/uploadSessions.js";
+import { findUploadSessionById, normalizeUploadSessionUserId, updateUploadSessionById } from "../../utils/uploadSessions.js";
 import { validateFsItemName } from "../../storage/fs/utils/FsInputValidator.js";
+import { StorageQuotaGuard } from "../../storage/usage/StorageQuotaGuard.js";
+import { toAbsoluteUrlIfRelative } from "../../constants/proxy.js";
 
 /**
  * 分片上传（multipart）
@@ -21,21 +23,10 @@ import { validateFsItemName } from "../../storage/fs/utils/FsInputValidator.js";
  *
  */
 
-const toAbsoluteUrlIfRelative = (requestUrl, maybeUrl) => {
-  if (typeof maybeUrl !== "string" || maybeUrl.length === 0) {
-    return maybeUrl;
-  }
-  if (!maybeUrl.startsWith("/")) {
-    return maybeUrl;
-  }
-  const origin = new URL(requestUrl).origin;
-  return new URL(maybeUrl, origin).toString();
-};
-
 const ensureAbsoluteSessionUploadUrl = (c, payload) => {
   const session = payload?.session;
   const uploadUrl = session?.uploadUrl;
-  const absolute = toAbsoluteUrlIfRelative(c.req.url, uploadUrl);
+  const absolute = toAbsoluteUrlIfRelative(c.req.raw, uploadUrl);
   if (!session || absolute === uploadUrl) {
     return payload;
   }
@@ -93,10 +84,79 @@ export const registerMultipartRoutes = (router, helpers) => {
     return { db: c.env.DB, encryptionSecret: getEncryptionSecret(c), repositoryFactory: c.get("repos"), userInfo, userIdOrInfo, userType };
   };
 
+  const assertUploadSessionOwnedByUser = (sessionRow, userIdOrInfo, userType) => {
+    if (!sessionRow) {
+      throw new ValidationError("未找到对应的上传会话");
+    }
+
+    const expectedUserId = normalizeUploadSessionUserId(userIdOrInfo, userType);
+    const rowUserId = String(sessionRow.user_id || "");
+    const rowUserType = String(sessionRow.user_type || "");
+
+    // 必须至少匹配 user_id；user_type 为空时视为兼容旧数据（不做强校验）
+    const idMatches = rowUserId === String(expectedUserId || "");
+    const typeMatches = !rowUserType || rowUserType === String(userType || "");
+
+    if (!idMatches || !typeMatches) {
+      throw new AuthenticationError("上传会话不属于当前用户，拒绝访问");
+    }
+  };
+
   const assertValidFileName = (fileName) => {
     const result = validateFsItemName(fileName);
     if (result.valid) return;
     throw new ValidationError(result.message);
+  };
+
+  const resolveTargetPath = (basePath, fileName) => {
+    const p = String(basePath || "");
+    const n = String(fileName || "");
+    if (!p || !n) return "";
+    return p.endsWith("/") ? `${p}${n}` : `${p}/${n}`;
+  };
+
+  const tryGetOldBytes = async (fileSystem, targetPath, userIdOrInfo, userType) => {
+    try {
+      const existing = await fileSystem.getFileInfo(targetPath, userIdOrInfo, userType);
+      if (existing && existing.isDirectory !== true && typeof existing.size === "number" && existing.size >= 0) {
+        return existing.size;
+      }
+    } catch {
+      // ignore
+    }
+    return null;
+  };
+
+  const assertStorageQuota = async ({
+                                      mountManager,
+                                      fileSystem,
+                                      quota,
+                                      pathForResolve,
+                                      storageConfigId,
+                                      targetPath,
+                                      userIdOrInfo,
+                                      userType,
+                                      incomingBytes,
+                                      withOldBytes = false,
+                                      context,
+                                    }) => {
+    const normalizedIncoming = Number(incomingBytes) || 0;
+    if (normalizedIncoming <= 0) return;
+
+    let finalStorageConfigId = storageConfigId || null;
+    if (!finalStorageConfigId && mountManager && pathForResolve) {
+      const { mount } = await mountManager.getDriverByPath(pathForResolve, userIdOrInfo, userType);
+      finalStorageConfigId = mount?.storage_config_id || null;
+    }
+    if (!finalStorageConfigId) return;
+
+    const oldBytes = withOldBytes && targetPath ? await tryGetOldBytes(fileSystem, targetPath, userIdOrInfo, userType) : null;
+    await quota.assertCanConsume({
+      storageConfigId: finalStorageConfigId,
+      incomingBytes: normalizedIncoming,
+      oldBytes,
+      context: context || "fs",
+    });
   };
 
   // =====================================================================
@@ -118,15 +178,30 @@ export const registerMultipartRoutes = (router, helpers) => {
 
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
-    const result = await fileSystem.initializeFrontendMultipartUpload(
-      path,
-      fileName,
-      fileSize,
+    const quota = new StorageQuotaGuard(db, encryptionSecret, repositoryFactory, { env: c.env });
+
+    await assertStorageQuota({
+      mountManager,
+      fileSystem,
+      quota,
+      pathForResolve: path,
+      targetPath: resolveTargetPath(path, fileName),
       userIdOrInfo,
       userType,
-      partSize,
-      partCount,
-      { sha256, contentType },
+      incomingBytes: fileSize,
+      withOldBytes: true,
+      context: "fs-multipart-init",
+    });
+
+    const result = await fileSystem.initializeFrontendMultipartUpload(
+        path,
+        fileName,
+        fileSize,
+        userIdOrInfo,
+        userType,
+        partSize,
+        partCount,
+        { sha256, contentType },
     );
 
     return jsonOk(c, ensureAbsoluteSessionUploadUrl(c, result), "前端分片上传初始化成功");
@@ -148,8 +223,28 @@ export const registerMultipartRoutes = (router, helpers) => {
       assertValidFileName(fileName);
     }
 
+    const sessionRow = await findUploadSessionById(db, { id: uploadId });
+    assertUploadSessionOwnedByUser(sessionRow, userIdOrInfo, userType);
+
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
+    const quota = new StorageQuotaGuard(db, encryptionSecret, repositoryFactory, { env: c.env });
+
+    // 兜底：complete 阶段再做一次自定义容量检查（防止绕过 init/或 init 时 size=0）
+    const finalFileSize = Math.max(Number(sessionRow?.file_size) || 0, Number(fileSize) || 0);
+    await assertStorageQuota({
+      mountManager,
+      fileSystem,
+      quota,
+      storageConfigId: sessionRow?.storage_config_id || null,
+      pathForResolve: path,
+      targetPath: fileName ? resolveTargetPath(path, fileName) : "",
+      userIdOrInfo,
+      userType,
+      incomingBytes: finalFileSize,
+      withOldBytes: !!fileName,
+      context: "fs-multipart-complete",
+    });
     const safeParts = Array.isArray(parts) ? parts : [];
     const result = await fileSystem.completeFrontendMultipartUpload(path, uploadId, safeParts, fileName, fileSize, userIdOrInfo, userType);
 
@@ -166,6 +261,9 @@ export const registerMultipartRoutes = (router, helpers) => {
     }
 
     assertValidFileName(fileName);
+
+    const sessionRow = await findUploadSessionById(db, { id: uploadId });
+    assertUploadSessionOwnedByUser(sessionRow, userIdOrInfo, userType);
 
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
@@ -200,6 +298,9 @@ export const registerMultipartRoutes = (router, helpers) => {
 
     assertValidFileName(fileName);
 
+    const sessionRow = await findUploadSessionById(db, { id: uploadId });
+    assertUploadSessionOwnedByUser(sessionRow, userIdOrInfo, userType);
+
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
     const result = await fileSystem.listMultipartParts(path, uploadId, fileName, userIdOrInfo, userType);
@@ -218,6 +319,9 @@ export const registerMultipartRoutes = (router, helpers) => {
     }
 
     const safePartNumbers = Array.isArray(partNumbers) ? partNumbers : [];
+
+    const sessionRow = await findUploadSessionById(db, { id: uploadId });
+    assertUploadSessionOwnedByUser(sessionRow, userIdOrInfo, userType);
 
     // 状态机推进：请求分片 URL 视为“开始上传”
     try {
@@ -266,17 +370,35 @@ export const registerMultipartRoutes = (router, helpers) => {
     const contentLength = contentLengthHeader ? Number.parseInt(contentLengthHeader, 10) || 0 : 0;
 
     const sessionRow = await findUploadSessionById(db, { id: uploadId });
-    if (!sessionRow) {
-      throw new ValidationError("未找到对应的上传会话");
-    }
+    assertUploadSessionOwnedByUser(sessionRow, userIdOrInfo, userType);
 
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
+    const quota = new StorageQuotaGuard(db, encryptionSecret, repositoryFactory, { env: c.env });
+
+    // 自定义容量限制
+    // - init 阶段通常已校验，但为了避免“绕过 init / init 时 file_size=0”的边界，这里做一次兜底。
+    // - 只在 initiated 状态时校验一次，避免每片都重复计算/查询。
+    if (String(sessionRow?.status || "") === "initiated") {
+      await assertStorageQuota({
+        mountManager,
+        fileSystem,
+        quota,
+        storageConfigId: sessionRow?.storage_config_id || null,
+        pathForResolve: sessionRow?.fs_path || "",
+        targetPath: resolveTargetPath(sessionRow?.fs_path || "", sessionRow?.file_name || ""),
+        userIdOrInfo,
+        userType,
+        incomingBytes: sessionRow?.file_size || 0,
+        withOldBytes: true,
+        context: "fs-multipart-upload-chunk",
+      });
+    }
 
     const { driver, mount } = await fileSystem.mountManager.getDriverByPath(
-      sessionRow.fs_path,
-      userIdOrInfo,
-      userType,
+        sessionRow.fs_path,
+        userIdOrInfo,
+        userType,
     );
 
     if (String(driver.getType()) !== String(sessionRow.storage_type)) {
@@ -312,14 +434,14 @@ export const registerMultipartRoutes = (router, helpers) => {
     }
 
     return jsonOk(
-      c,
-      {
-        success: true,
-        done: result?.done === true,
-        status: result?.status ?? 200,
-        skipped: result?.skipped === true,
-      },
-      "分片上传成功",
+        c,
+        {
+          success: true,
+          done: result?.done === true,
+          status: result?.status ?? 200,
+          skipped: result?.skipped === true,
+        },
+        "分片上传成功",
     );
   });
 
@@ -348,6 +470,23 @@ export const registerMultipartRoutes = (router, helpers) => {
     }
 
     const fileSystem = new FileSystem(mountManager);
+    const quota = new StorageQuotaGuard(db, encryptionSecret, repositoryFactory, { env: c.env });
+
+    // 自定义容量限制：在发放预签名 URL 前拦截
+    await assertStorageQuota({
+      mountManager,
+      fileSystem,
+      quota,
+      storageConfigId: mount.storage_config_id,
+      pathForResolve: path,
+      targetPath,
+      userIdOrInfo,
+      userType,
+      incomingBytes: fileSize,
+      withOldBytes: true,
+      context: "fs-presign",
+    });
+
     const result = await fileSystem.generateUploadUrl(targetPath, userIdOrInfo, userType, {
       operation: "upload",
       fileName,
@@ -359,24 +498,24 @@ export const registerMultipartRoutes = (router, helpers) => {
     const fileId = generateFileId();
 
     return jsonOk(
-      c,
-      {
-        presignedUrl: result.uploadUrl,
-        fileId,
-        storagePath: result.storagePath,
-        publicUrl: result.publicUrl || null,
-        mountId: mount.id,
-        storageConfigId: mount.storage_config_id,
-        storageType: mount.storage_type || null,
-        targetPath,
-        contentType: result.contentType,
-        headers: result.headers || undefined,
-        sha256: result.sha256 || sha256 || null,
-        repoRelPath: result.repoRelPath || result.storagePath || null,
-        // 透传：如果上游判定对象已存在（去重），可以跳过 PUT，直接 commit 登记
-        skipUpload: result.skipUpload === true,
-      },
-      { success: true },
+        c,
+        {
+          presignedUrl: result.uploadUrl,
+          fileId,
+          storagePath: result.storagePath,
+          publicUrl: result.publicUrl || null,
+          mountId: mount.id,
+          storageConfigId: mount.storage_config_id,
+          storageType: mount.storage_type || null,
+          targetPath,
+          contentType: result.contentType,
+          headers: result.headers || undefined,
+          sha256: result.sha256 || sha256 || null,
+          repoRelPath: result.repoRelPath || result.storagePath || null,
+          // 透传：如果上游判定对象已存在（去重），可以跳过 PUT，直接 commit 登记
+          skipUpload: result.skipUpload === true,
+        },
+        { success: true },
     );
   });
 
@@ -402,6 +541,21 @@ export const registerMultipartRoutes = (router, helpers) => {
 
     const mountManager = new MountManager(db, encryptionSecret, repositoryFactory, { env: c.env });
     const fileSystem = new FileSystem(mountManager);
+    const quota = new StorageQuotaGuard(db, encryptionSecret, repositoryFactory, { env: c.env });
+
+    // 自定义容量限制：commit 阶段兜底校验
+    await assertStorageQuota({
+      mountManager,
+      fileSystem,
+      quota,
+      pathForResolve: targetPath,
+      targetPath,
+      userIdOrInfo,
+      userType,
+      incomingBytes: fileSize,
+      withOldBytes: true,
+      context: "fs-presign-commit",
+    });
 
     // 使用 FileSystem 对齐目录标记与缓存逻辑
     const result = await fileSystem.commitPresignedUpload(targetPath, fileName, userIdOrInfo, userType, {
